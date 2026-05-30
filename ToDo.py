@@ -95,6 +95,25 @@ class InputSuggester(Suggester):
         return None
 
 
+# ---------- INPUT WIDGET ----------
+class TabInput(Input):
+    """An Input where Tab accepts the autocomplete suggestion (just like →)."""
+
+    async def _on_key(self, event):
+        if (
+            event.key == "tab"
+            and self.cursor_at_end
+            and self._suggestion
+            and self._suggestion != self.value
+        ):
+            self.value = self._suggestion
+            self.cursor_position = len(self.value)
+            event.stop()
+            event.prevent_default()
+            return
+        await super()._on_key(event)
+
+
 # ---------- APP ----------
 class TodoApp(App):
     COMMANDS = [
@@ -146,7 +165,7 @@ class TodoApp(App):
         self.status_bar = Static("", id="status")
         yield self.status_bar
 
-        self.input_box = Input(
+        self.input_box = TabInput(
             placeholder="Type task or command...",
             suggester=InputSuggester(self),
             id="cmd"
