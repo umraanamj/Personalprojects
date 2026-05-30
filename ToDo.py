@@ -16,20 +16,20 @@ REPORT_FILE = os.path.join(DATA_DIR, "completed_report.txt")
 # How long a completed task stays in the main view before being archived.
 ARCHIVE_AFTER = timedelta(hours=24)
 
-# ---------- BIG TIMER FONT (5 rows tall) ----------
+# ---------- BIG TIMER FONT (3 rows tall, seven-segment) ----------
 BIG = {
-    "0": ["███", "█ █", "█ █", "█ █", "███"],
-    "1": ["  █", "  █", "  █", "  █", "  █"],
-    "2": ["███", "  █", "███", "█  ", "███"],
-    "3": ["███", "  █", "███", "  █", "███"],
-    "4": ["█ █", "█ █", "███", "  █", "  █"],
-    "5": ["███", "█  ", "███", "  █", "███"],
-    "6": ["███", "█  ", "███", "█ █", "███"],
-    "7": ["███", "  █", "  █", "  █", "  █"],
-    "8": ["███", "█ █", "███", "█ █", "███"],
-    "9": ["███", "█ █", "███", "  █", "███"],
-    ":": [" ", "█", " ", "█", " "],
-    " ": ["   ", "   ", "   ", "   ", "   "],
+    "0": [" _ ", "| |", "|_|"],
+    "1": ["   ", "  |", "  |"],
+    "2": [" _ ", " _|", "|_ "],
+    "3": [" _ ", " _|", " _|"],
+    "4": ["   ", "|_|", "  |"],
+    "5": [" _ ", "|_ ", " _|"],
+    "6": [" _ ", "|_ ", "|_|"],
+    "7": [" _ ", "  |", "  |"],
+    "8": [" _ ", "|_|", "|_|"],
+    "9": [" _ ", "|_|", " _|"],
+    ":": ["   ", " ° ", " ° "],
+    " ": ["   ", "   ", "   "],
 }
 
 
@@ -104,19 +104,21 @@ class TodoApp(App):
 
     CSS = """
     Screen { layout: vertical; }
+
+    /* main panes take all the flexible space, pushing the rest to the bottom */
     #main { height: 1fr; }
     #graph { width: 65%; border: solid #666; padding: 1; }
     #tasks { width: 35%; border: solid #666; padding: 1; }
 
-    /* tall status bar for the big pomodoro timer */
+    /* status bar: big pomodoro timer + loading bar + stats (not docked) */
     #status {
-        dock: bottom;
-        height: 9;
+        height: 7;
         border-top: solid #666;
         padding: 0 1;
     }
 
-    Input { dock: bottom; }
+    /* input sits just above the footer in normal flow */
+    #cmd { height: 3; }
     """
 
     def __init__(self):
@@ -146,7 +148,8 @@ class TodoApp(App):
 
         self.input_box = Input(
             placeholder="Type task or command...",
-            suggester=InputSuggester(self)
+            suggester=InputSuggester(self),
+            id="cmd"
         )
         yield self.input_box
         yield Footer()
@@ -196,11 +199,11 @@ class TodoApp(App):
             frac = 0.0
             color = "#3a8f5f"
 
-        rows = ["", "", "", "", ""]
+        rows = ["", "", ""]
         for ch in txt:
             glyph = BIG.get(ch, BIG[" "])
-            for r in range(5):
-                rows[r] += glyph[r] + "  "
+            for r in range(3):
+                rows[r] += glyph[r] + " "
         big = "\n".join(f"[{color}]{row}[/]" for row in rows)
 
         # Full-width loading bar spanning the status bar.
@@ -211,9 +214,9 @@ class TodoApp(App):
         bar = "█" * filled + "░" * (bar_w - filled)
 
         if prog:
-            info = f"[{color}]{int(frac * 100)}% elapsed[/]   [dim]{self.get_stats()}[/]"
+            info = f"[{color}]{int(frac * 100)}% elapsed[/]   [bold]{self.get_stats()}[/]"
         else:
-            info = f"[dim]no timer · /current <n> <min>   {self.get_stats()}[/]"
+            info = f"[bold]{self.get_stats()}[/]   [dim]· /current <n> <min> to start a timer[/]"
 
         return f"{big}\n[{color}]{bar}[/]\n{info}"
 
@@ -242,7 +245,7 @@ class TodoApp(App):
             if t.completed_at and t.completed_at.year == now.year
         )
 
-        return f"D:{day} W:{week} M:{month} Y:{year} T:{len(all_tasks)}"
+        return f"Today {day}  ·  Week {week}  ·  Month {month}  ·  Year {year}  ·  Total {len(all_tasks)}"
 
     # ---------- SAVE / LOAD ----------
     def save_data(self):
