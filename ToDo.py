@@ -730,9 +730,9 @@ class TodoApp(App):
         tree = {}
         for t in self.visible_tasks():
             node = tree
-            for p in t.path:
-                if p.strip():
-                    node = node.setdefault(p.title(), {})
+            for seg in t.path:
+                if seg.strip():
+                    node = node.setdefault(seg.title(), {})
             node.setdefault("_tasks", []).append(t)
 
         open_tasks = self.get_open_tasks_ordered()
