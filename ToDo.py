@@ -144,6 +144,24 @@ class InputSuggester(Suggester):
                 if opt.startswith(word) and opt != word:
                     return prefix + "@" + opt
 
+        # folder completion: as you type a project path, suggest a matching
+        # existing folder — one segment at a time. (Not in command lines.)
+        if last and not value.startswith("/") and not last.startswith(("@", "#")):
+            prefix = value[:cut + 1]
+            folders = self._app.folder_tree()
+            if "/" in last:
+                # typing a sub-folder: complete the segment after the last "/"
+                head, _, partial = last.rpartition("/")
+                parent = tuple(s.strip().title() for s in head.split("/") if s.strip())
+                for child in sorted(folders.get(parent, set())):
+                    if child.lower().startswith(partial.lower()) and child.lower() != partial.lower():
+                        return prefix + head + "/" + child
+            else:
+                # first segment: complete a top-level folder, ending in "/"
+                for child in sorted(folders.get((), set())):
+                    if child.lower().startswith(last.lower()) and child.lower() != last.lower():
+                        return prefix + child + "/"
+
         return None
 
 
@@ -666,6 +684,16 @@ class TodoApp(App):
                     tags.add(tok)
         return tags
 
+    def folder_tree(self):
+        # Maps a parent path tuple -> set of its child folder names, e.g.
+        # () -> {"Work", "Personal"};  ("Work",) -> {"Backend"}.
+        children = {}
+        for t in self.tasks + self.archived_tasks:
+            segs = [s for s in t.path if s]
+            for i, seg in enumerate(segs):
+                children.setdefault(tuple(segs[:i]), set()).add(seg)
+        return children
+
     def visible_tasks(self):
         tasks = self.tasks
         if self.filter_tag:
@@ -904,31 +932,38 @@ class TodoApp(App):
         return None
 
     def parse_task_input(self, raw):
-        # Pull out the first @token that parses as a due date, then parse the rest.
+        # Pull out the due date — either "@<date>" anywhere, or the words
+        # "due <date>" (e.g. "due today") — then parse the rest into text + path.
         due = None
         kept = []
-        for tok in raw.strip().split():
+        toks = raw.strip().split()
+        i = 0
+        while i < len(toks):
+            tok = toks[i]
             if due is None and tok.startswith("@") and len(tok) > 1:
                 parsed = self.parse_due(tok)
                 if parsed is not None:
                     due = parsed
+                    i += 1
+                    continue
+            if due is None and tok.lower() == "due" and i + 1 < len(toks):
+                parsed = self.parse_due(toks[i + 1])
+                if parsed is not None:
+                    due = parsed
+                    i += 2
                     continue
             kept.append(tok)
+            i += 1
 
-        text, path = "", []
-        # Leading path (how /edit lays tasks out): first token is a folder path
-        # when it contains "/" and there's still text after it.
+        text, path = " ".join(kept), []
+        # Leading path (how /edit lays tasks out): "Folder/Sub  rest of text".
         if len(kept) >= 2 and "/" in kept[0]:
-            path = [p.strip().title() for p in kept[0].split("/") if p.strip()]
+            path = [s.strip().title() for s in kept[0].split("/") if s.strip()]
             text = " ".join(kept[1:])
-        else:
-            raw = " ".join(kept).rstrip("/")
-            text = raw
-            if "/" in raw:
-                parts = raw.rsplit(" ", 1)
-                if len(parts) == 2 and "/" in parts[1]:
-                    text = parts[0]
-                    path = [p.strip().title() for p in parts[1].split("/") if p.strip()]
+        # Trailing path (normal add): "task text  Folder/Sub" or "task Folder/".
+        elif len(kept) >= 2 and "/" in kept[-1]:
+            path = [s.strip().title() for s in kept[-1].split("/") if s.strip()]
+            text = " ".join(kept[:-1])
 
         return text, path, due
 
@@ -1180,9 +1215,9 @@ class TodoApp(App):
 
         elif cmd == "/help":
             self.notify(
-                "ADD TASK: text, optional 'project/sub', optional '@due'\n"
-                "          e.g.  pay rent #bills Money/Home @2026-06-01\n"
-                "  due forms: @today @tomorrow @fri @3d @2026-06-01\n"
+                "ADD TASK: text, optional 'project/sub', optional due date\n"
+                "          e.g.  pay rent #bills Money/Home due today\n"
+                "  due forms: @today / due today · @fri / due fri · @3d · 2026-06-01\n"
                 "\n"
                 "/current <n> [minutes]  set active task + pomodoro timer\n"
                 "/done <n>               complete task n\n"

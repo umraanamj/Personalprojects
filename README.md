@@ -31,6 +31,7 @@ completion stats — all driven from a single command line at the bottom of the 
   color, and the right pane shows a flat numbered list.
 - **Natural-language due dates** — `@today`, `@tomorrow`, a weekday (`@fri`,
   `@monday`), a relative offset (`@3d`), or an explicit date (`@2026-06-15`, `@06-15`).
+  The `@` is optional — you can also write `due today`, `due fri`, etc.
   Tasks show a colored badge that updates live: red **overdue Nd**, bold-yellow
   **today**, yellow **tomorrow**, the weekday name within a week, or the date beyond
   that. Tasks are always ordered soonest-due first.
@@ -53,9 +54,11 @@ completion stats — all driven from a single command line at the bottom of the 
   `solarized-dark`, and more. Your choice is remembered.
 - **Completed view & auto-archive** — `/completed` shows finished tasks grouped by day;
   completed tasks are automatically archived out of the main view after 24 hours.
-- **Autocomplete** — type `/` for commands, `#` for existing tags, or `@` for due
-  dates, and accept the faded suggestion with **Tab** or **→**. A contextual hint line
-  above the input shows valid options for whatever you're typing.
+- **Autocomplete** — type `/` for commands, `#` for existing tags, `@` for due
+  dates, or a project path to complete an existing folder one segment at a time
+  (e.g. `Wo`→`Work/`, then `Work/Ba`→`Work/Backend`). Accept the faded suggestion
+  with **Tab** or **→**. A contextual hint line above the input shows valid options
+  for whatever you're typing.
 - **Scrollable panes** — both the project tree and the task list scroll with the mouse
   wheel when you have more tasks than fit on screen.
 - **Persistent & exportable** — everything is saved to JSON automatically, and a
