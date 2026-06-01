@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, date
 import hashlib
 import json
 import os
+import re
 
 # ---------- STORAGE ----------
 DATA_DIR = os.path.join(os.path.expanduser("~"), "TodoApp")
@@ -93,6 +94,15 @@ class InputSuggester(Suggester):
                 if tag.lower().startswith(low) and tag.lower() != low:
                     return value + tag[len(last):]
 
+        # @due-date completion on the final token (@ alone suggests @today)
+        if last.startswith("@"):
+            word = last[1:].lower()
+            prefix = value[:cut + 1]
+            for opt in ("today", "tomorrow", "mon", "tue", "wed", "thu",
+                        "fri", "sat", "sun"):
+                if opt.startswith(word) and opt != word:
+                    return prefix + "@" + opt
+
         return None
 
 
@@ -141,6 +151,9 @@ class TodoApp(App):
         padding: 0 1;
     }
 
+    /* faded contextual hint line, sits just above the input */
+    #hint { height: 1; padding: 0 1; }
+
     /* input sits just above the footer in normal flow */
     #cmd { height: 3; }
     """
@@ -172,6 +185,9 @@ class TodoApp(App):
 
         self.status_bar = Static("", id="status")
         yield self.status_bar
+
+        self.hint_bar = Static(self.hint_for(""), id="hint")
+        yield self.hint_bar
 
         self.input_box = TabInput(
             placeholder="Type task or command...",
@@ -637,6 +653,26 @@ class TodoApp(App):
             color, label = "#888888", t.due.isoformat()
         return f" [{color}]⏳{label}[/]"
 
+    # ---------- HINT LINE ----------
+    def hint_for(self, value):
+        # Faded line above the input; shows due-date options while entering one.
+        low = value.lower()
+        last = value.split(" ")[-1] if value else ""
+        dates = "today · tomorrow · mon–sun · 3d · 2026-06-15"
+
+        if low.startswith("/filter due"):
+            return "[dim]filter by due: today · tomorrow · week · overdue · 2026-06-15[/]"
+        if re.match(r"/edit\s+\d+\s", low) is not None:
+            return f"[dim]set due date:  due tomorrow · due fri · due 2026-06-15   (dates: {dates})[/]"
+        if low.startswith("/due ") or last.startswith("@"):
+            return f"[dim]due options: {dates}[/]"
+        if not value:
+            return "[dim]task text · project as Work/Sub · due as @tomorrow · /help for commands[/]"
+        return ""
+
+    def on_input_changed(self, event: Input.Changed):
+        self.hint_bar.update(self.hint_for(event.value))
+
     # ---------- INPUT ----------
     def on_input_submitted(self, event: Input.Submitted):
         raw = event.value.strip()
@@ -712,13 +748,27 @@ class TodoApp(App):
             try:
                 idx = int(parts[1])
                 task = self.get_open_tasks_ordered()[idx - 1]
-                self.editing_task_id = task.id
-                self.input_box.value = self.task_to_input(task)
-                self.input_box.cursor_position = len(self.input_box.value)
-                self.input_box.focus()
-                self.notify(f"Editing ({idx}) — change the text and press Enter")
             except (ValueError, IndexError):
-                self.notify("Usage: /edit <n>")
+                self.notify("Usage: /edit <n>   or   /edit <n> @<due>")
+            else:
+                if len(parts) > 2:
+                    # quick due-date edit — change only the date, leave text alone.
+                    # accepts "/edit n due tomorrow" or "/edit n @tomorrow".
+                    date_parts = parts[2:]
+                    if date_parts[0].lower() == "due":
+                        date_parts = date_parts[1:]
+                    d = self.parse_due(" ".join(date_parts)) if date_parts else None
+                    if d is None:
+                        self.notify("Bad date. Try /edit n due tomorrow, due fri, due 2026-06-15")
+                    else:
+                        task.due = d
+                        self.notify(f"Due {d.isoformat()}: {task.text}")
+                else:
+                    self.editing_task_id = task.id
+                    self.input_box.value = self.task_to_input(task)
+                    self.input_box.cursor_position = len(self.input_box.value)
+                    self.input_box.focus()
+                    self.notify(f"Editing ({idx}) — change the text and press Enter")
 
         elif parts[0] == "/delete" and len(parts) > 1:
             try:
@@ -803,6 +853,7 @@ class TodoApp(App):
                 "/current <n> [minutes]  set active task + pomodoro timer\n"
                 "/done <n>               complete task n\n"
                 "/edit <n>               load task n into the box to edit\n"
+                "/edit <n> due <date>    quickly set just the due date (e.g. due tomorrow)\n"
                 "/due <n> [date]         set/clear due date (blank = clear)\n"
                 "/delete <n>             delete task n\n"
                 "/filter <tag>           show only tasks with #tag (blank = clear)\n"
