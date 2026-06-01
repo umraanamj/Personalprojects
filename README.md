@@ -44,6 +44,9 @@ completion stats — all driven from a single command line at the bottom of the 
   a notification when it completes.
 - **Completion stats** — the status bar tracks tasks completed today, this week, this
   month, this year, and in total.
+- **Subtle sounds** — short system sounds on "win" moments (completing a task, finishing
+  a Pomodoro, starting a focus timer). Cross-platform with no dependencies (macOS
+  `afplay`, Windows `winsound`, Linux freedesktop sounds); toggle with `/sound`.
 - **Completed view & auto-archive** — `/completed` shows finished tasks grouped by day;
   completed tasks are automatically archived out of the main view after 24 hours.
 - **Autocomplete** — type `/` for commands, `#` for existing tags, or `@` for due
@@ -94,6 +97,7 @@ All commands are typed into the input box. `<n>` refers to a task's number in th
 | `/back` | Leave the completed view |
 | `/clear all` | Delete all tasks and the archive |
 | `/export` | Write a readable report of completed tasks |
+| `/sound` | Toggle completion/timer sounds on or off (persists) |
 | `/help` | Show in-app help |
 
 ## Where your data lives

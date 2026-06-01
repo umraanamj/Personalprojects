@@ -10,6 +10,9 @@ import os
 import re
 import random
 import colorsys
+import sys
+import shutil
+import subprocess
 
 # glyphs used for the "decrypt" scramble effect and title glitch
 SCRAMBLE_GLYPHS = "!@#$%&*+=/\\<>?▓▒░01x"
@@ -190,7 +193,7 @@ class TodoApp(App):
 
     COMMANDS = [
         "/help", "/current", "/done", "/edit", "/due", "/delete", "/filter",
-        "/completed", "/back", "/clear all", "/export",
+        "/completed", "/back", "/clear all", "/export", "/sound",
     ]
 
     CSS = """
@@ -264,6 +267,12 @@ class TodoApp(App):
         self._title_base = self.TITLE
         self._reveal = None
         self._reveal_timer = None
+        # sound: little dopamine hits on "win" events (cross-platform, no deps)
+        self.sound_on = True
+        self._afplay = shutil.which("afplay")            # macOS
+        self._linux_player = (                           # linux best-effort
+            shutil.which("canberra-gtk-play") or shutil.which("paplay")
+        )
 
     # ---------- UI ----------
     def compose(self) -> ComposeResult:
@@ -360,6 +369,45 @@ class TodoApp(App):
         )
         return t.text[:n] + tail
 
+    # ---------- SOUND ----------
+    def _play(self, event):
+        """Fire a short system sound for a 'win' event. Non-blocking, best-effort,
+        cross-platform; silently does nothing if no audio backend is available."""
+        if not self.sound_on:
+            return
+        try:
+            if sys.platform == "darwin" and self._afplay:
+                name = {"complete": "Glass", "win": "Hero",
+                        "start": "Bottle", "toggle": "Pop"}.get(event, "Pop")
+                path = f"/System/Library/Sounds/{name}.aiff"
+                if os.path.exists(path):
+                    subprocess.Popen(
+                        [self._afplay, "-v", "0.4", path],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    )
+            elif sys.platform == "win32":
+                import winsound
+                alias = {"complete": "SystemAsterisk", "win": "SystemExclamation",
+                         "start": "SystemDefault", "toggle": "SystemDefault"}.get(
+                    event, "SystemDefault")
+                winsound.PlaySound(alias, winsound.SND_ALIAS | winsound.SND_ASYNC)
+            elif self._linux_player:
+                if self._linux_player.endswith("canberra-gtk-play"):
+                    cid = {"complete": "complete", "win": "complete",
+                           "start": "message", "toggle": "bell"}.get(event, "bell")
+                    cmd = [self._linux_player, "-i", cid]
+                else:  # paplay + freedesktop sound theme
+                    fname = {"complete": "complete", "win": "complete",
+                             "start": "message", "toggle": "bell"}.get(event, "bell")
+                    sound = f"/usr/share/sounds/freedesktop/stereo/{fname}.oga"
+                    if not os.path.exists(sound):
+                        return
+                    cmd = [self._linux_player, sound]
+                subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
     # ---------- TIMER ----------
     def update_timer(self):
         if not self.timer_end:
@@ -369,6 +417,7 @@ class TodoApp(App):
             self.timer_total = None
             self.current_task_id = None
             self.notify("⏱ Timer complete")
+            self._play("win")
         self.refresh_all()
 
     def format_timer(self):
@@ -470,7 +519,8 @@ class TodoApp(App):
         data = {
             "tasks": [t.to_dict() for t in self.tasks],
             "archived": [t.to_dict() for t in self.archived_tasks],
-            "task_id": self.task_id
+            "task_id": self.task_id,
+            "sound_on": self.sound_on,
         }
         tmp = DATA_FILE + ".tmp"
         with open(tmp, "w") as f:
@@ -491,6 +541,7 @@ class TodoApp(App):
         self.tasks = [Task.from_dict(t) for t in data.get("tasks", [])]
         self.archived_tasks = [Task.from_dict(t) for t in data.get("archived", [])]
         self.task_id = data.get("task_id", 1)
+        self.sound_on = data.get("sound_on", True)
 
     # ---------- EXPORT REPORT ----------
     def export_readable_report(self):
@@ -900,6 +951,7 @@ class TodoApp(App):
                     mins = int(parts[2])
                     self.timer_end = datetime.now() + timedelta(minutes=mins)
                     self.timer_total = mins * 60
+                    self._play("start")
             except (ValueError, IndexError):
                 self.notify("Usage: /current <n> [minutes]")
 
@@ -909,6 +961,7 @@ class TodoApp(App):
                 task = self.get_open_tasks_ordered()[idx - 1]
                 task.completed = True
                 task.completed_at = datetime.now()
+                self._play("complete")
 
                 if task.id == self.current_task_id:
                     self.current_task_id = None
@@ -1017,6 +1070,11 @@ class TodoApp(App):
             self.export_readable_report()
             self.notify("Report exported")
 
+        elif cmd == "/sound":
+            self.sound_on = not self.sound_on
+            self.notify(f"Sound {'ON' if self.sound_on else 'OFF'}")
+            self._play("toggle")
+
         elif cmd == "/help":
             self.notify(
                 "ADD TASK: text, optional 'project/sub', optional '@due'\n"
@@ -1035,6 +1093,7 @@ class TodoApp(App):
                 "/back                   leave the completed view\n"
                 "/clear all              delete all tasks and archive\n"
                 "/export                 write completed_report.txt\n"
+                "/sound                  toggle completion/timer sounds\n"
                 "/help                   show this help\n",
                 timeout=18
             )
