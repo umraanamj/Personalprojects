@@ -2,11 +2,16 @@ from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Input, Static
 from textual.containers import Horizontal, VerticalScroll
 from textual.suggester import Suggester
+from textual.screen import Screen
 from datetime import datetime, timedelta, date
 import hashlib
 import json
 import os
 import re
+import random
+
+# glyphs used for the "decrypt" scramble effect and title glitch
+SCRAMBLE_GLYPHS = "!@#$%&*+=/\\<>?▓▒░01x"
 
 # ---------- STORAGE ----------
 DATA_DIR = os.path.join(os.path.expanduser("~"), "TodoApp")
@@ -125,37 +130,123 @@ class TabInput(Input):
         await super()._on_key(event)
 
 
+# ---------- BOOT SEQUENCE ----------
+class BootScreen(Screen):
+    """A throwaway startup log that types itself out, then drops into the app."""
+
+    LINES = [
+        "> INITIALIZING TASK MATRIX v2.4 ...",
+        "> MOUNTING ~/TodoApp ........... OK",
+        "> LOADING RECORDS [{n}] ......... OK",
+        "> DECRYPTING BUFFER ............ OK",
+        "> SYSTEM ONLINE",
+    ]
+
+    def __init__(self, active):
+        super().__init__()
+        self.lines = [ln.format(n=active) for ln in self.LINES]
+        self._i = 0
+        self._timer = None
+        self._done = False
+
+    def compose(self) -> ComposeResult:
+        self.log_view = Static("", id="boot")
+        yield self.log_view
+
+    def on_mount(self):
+        self._timer = self.set_interval(0.08, self._tick)
+
+    def _tick(self):
+        n = len(self.lines)
+        if self._i <= n:
+            self.log_view.update("\n".join(self.lines[:self._i]) + " ▮")
+            self._i += 1
+        elif self._i >= n + 4:        # brief hold on the final frame
+            self._finish()
+        else:
+            self._i += 1
+
+    def on_key(self, event):
+        self._finish()                # any key skips the intro
+
+    def _finish(self):
+        if self._done:
+            return
+        self._done = True
+        if self._timer:
+            self._timer.stop()
+        self.app.pop_screen()
+        try:
+            self.app.query_one("#cmd").focus()
+        except Exception:
+            pass
+
+
 # ---------- APP ----------
 class TodoApp(App):
+    TITLE = "TODO//SYS"
+    SUB_TITLE = "task matrix online"
+
     COMMANDS = [
         "/help", "/current", "/done", "/edit", "/due", "/delete", "/filter",
         "/completed", "/back", "/clear all", "/export",
     ]
 
+    # neon terminal palette for project folders / tasks (green–cyan family)
+    PALETTE = [
+        "#00ff9c", "#00d7ff", "#39ff14", "#2ee6d6", "#7cfc00",
+        "#16f0a0", "#5ef38c", "#0fffc1", "#9dff00", "#00e5ff",
+    ]
+
     CSS = """
-    Screen { layout: vertical; }
+    /* ---- hacker terminal theme: phosphor green on black ---- */
+    Screen { layout: vertical; background: #04070a; color: #33ff66; }
+
+    Header { background: #02160d; color: #00ff9c; text-style: bold; }
+    Footer { background: #02160d; color: #1f9c5a; }
 
     /* main panes take all the flexible space, pushing the rest to the bottom */
     #main { height: 1fr; }
 
     /* scrollable wrappers hold the border/width; inner Static grows to fit so
        the wrapper can scroll when there are more tasks than fit on screen */
-    #graph-scroll { width: 65%; border: solid #666; height: 1fr; }
-    #tasks-scroll { width: 35%; border: solid #666; height: 1fr; }
+    #graph-scroll {
+        width: 65%; height: 1fr;
+        border: round #00ff9c;
+        border-title-color: #00ff9c; border-title-align: left;
+        scrollbar-color: #00ff9c; scrollbar-background: #04070a;
+    }
+    #tasks-scroll {
+        width: 35%; height: 1fr;
+        border: round #00d7ff;
+        border-title-color: #00d7ff; border-title-align: left;
+        scrollbar-color: #00d7ff; scrollbar-background: #04070a;
+    }
     #graph, #tasks { padding: 1; height: auto; }
 
     /* status bar: big pomodoro timer + loading bar + stats (not docked) */
     #status {
         height: 7;
-        border-top: solid #666;
+        border-top: heavy #00ff9c;
         padding: 0 1;
+        color: #00ff9c;
     }
 
     /* faded contextual hint line, sits just above the input */
-    #hint { height: 1; padding: 0 1; }
+    #hint { height: 1; padding: 0 1; color: #1f9c5a; }
 
     /* input sits just above the footer in normal flow */
-    #cmd { height: 3; }
+    #cmd {
+        height: 3;
+        border: tall #00ff9c;
+        background: #02160d;
+        color: #aaffcc;
+    }
+    #cmd:focus { border: tall #39ff14; }
+
+    /* boot sequence overlay */
+    BootScreen { background: #04070a; }
+    #boot { padding: 2 4; color: #00ff9c; text-style: bold; }
     """
 
     def __init__(self):
@@ -170,6 +261,13 @@ class TodoApp(App):
         self.editing_task_id = None
         self.filter_tag = None
         self.filter_due = None
+        # animation / telemetry state
+        self.start_time = datetime.now()
+        self.blink = False
+        self._tick_count = 0
+        self._title_base = self.TITLE
+        self._reveal = None
+        self._reveal_timer = None
 
     # ---------- UI ----------
     def compose(self) -> ComposeResult:
@@ -190,7 +288,7 @@ class TodoApp(App):
         yield self.hint_bar
 
         self.input_box = TabInput(
-            placeholder="Type task or command...",
+            placeholder="root@todo:~$  enter task or /command …",
             suggester=InputSuggester(self),
             id="cmd"
         )
@@ -198,10 +296,73 @@ class TodoApp(App):
         yield Footer()
 
     def on_mount(self):
+        self.query_one("#graph-scroll").border_title = "[ PROJECTS ]"
+        self.query_one("#tasks-scroll").border_title = "[ TASKS ]"
         self.load_data()
         self.refresh_all()
         self.set_interval(30, self.cleanup_completed_tasks)
         self.set_interval(1, self.update_timer)
+        self.set_interval(0.5, self._heartbeat)     # blink + telemetry
+        self.set_interval(3.0, self._glitch_title)  # occasional title glitch
+        active = len([t for t in self.tasks if not t.completed])
+        self.push_screen(BootScreen(active))        # typed startup log
+
+    # ---------- LIVE TELEMETRY / EFFECTS ----------
+    def _heartbeat(self):
+        # cheap always-on tick: drives the blinking colon, REC dot, shimmer
+        self.blink = not self.blink
+        self._tick_count += 1
+        self.status_bar.update(self.render_big_timer())
+
+    def _uptime_str(self):
+        secs = int((datetime.now() - self.start_time).total_seconds())
+        h, rem = divmod(secs, 3600)
+        m, s = divmod(rem, 60)
+        return f"{h:02}:{m:02}:{s:02}"
+
+    def _garble(self, s):
+        sub = {"O": "0", "S": "5", "T": "7", "A": "4", "E": "3", "I": "1"}
+        out = []
+        for c in s:
+            if c.isalpha() and random.random() < 0.5:
+                out.append(sub.get(c.upper(), random.choice("#%@&$")))
+            else:
+                out.append(c)
+        return "".join(out)
+
+    def _glitch_title(self):
+        # flicker the header title for a fraction of a second, then snap back
+        self.title = self._garble(self._title_base)
+        self.set_timer(0.15, lambda: setattr(self, "title", self._title_base))
+
+    def _start_reveal(self, task):
+        self._reveal = {"id": task.id, "n": 0, "len": len(task.text)}
+        if self._reveal_timer:
+            self._reveal_timer.stop()
+        self._reveal_timer = self.set_interval(0.03, self._reveal_tick)
+
+    def _reveal_tick(self):
+        r = self._reveal
+        if not r:
+            return
+        r["n"] += 1
+        if r["n"] >= r["len"]:
+            self._reveal = None
+            if self._reveal_timer:
+                self._reveal_timer.stop()
+                self._reveal_timer = None
+        self.refresh_all()
+
+    def _display_text(self, t):
+        # real text, unless this task is mid-"decrypt" — then scramble the tail
+        r = self._reveal
+        if not r or r["id"] != t.id:
+            return t.text
+        n = r["n"]
+        tail = "".join(
+            c if c == " " else random.choice(SCRAMBLE_GLYPHS) for c in t.text[n:]
+        )
+        return t.text[:n] + tail
 
     # ---------- TIMER ----------
     def update_timer(self):
@@ -240,7 +401,11 @@ class TodoApp(App):
             color = "#00d36a" if rem_frac > 0.5 else ("#ffb300" if rem_frac > 0.2 else "#ff4040")
         else:
             frac = 0.0
-            color = "#3a8f5f"
+            color = "#00ff9c"
+
+        # blink the colon once per heartbeat while a timer is running
+        if prog and not self.blink:
+            txt = txt.replace(":", " ")
 
         rows = ["", "", ""]
         for ch in txt:
@@ -249,19 +414,33 @@ class TodoApp(App):
                 rows[r] += glyph[r] + " "
         big = "\n".join(f"[{color}]{row}[/]" for row in rows)
 
-        # Full-width loading bar spanning the status bar.
+        # Full-width loading bar with a single bright "scanning" cell drifting across.
         bar_w = self.status_bar.size.width - 2
         if bar_w < 10:
             bar_w = 40
         filled = int(round(frac * bar_w))
-        bar = "█" * filled + "░" * (bar_w - filled)
+        shimmer = self._tick_count % bar_w
+        cells = []
+        for i in range(bar_w):
+            ch = "█" if i < filled else "░"
+            cells.append(f"[#ccffe9]{ch}[/]" if i == shimmer else ch)
+        bar = "".join(cells)
+
+        # telemetry line: pulsing REC dot, uptime, live buffer count
+        rec = "[#ff4040]●[/]" if self.blink else "[#5a1414]●[/]"
+        active = len([t for t in self.tasks if not t.completed])
+        telem = (
+            f"{rec} [bold]REC[/]   "
+            f"[#1f9c5a]uptime {self._uptime_str()}[/]   "
+            f"[#1f9c5a]buffer: {active}[/]"
+        )
 
         if prog:
             info = f"[{color}]{int(frac * 100)}% elapsed[/]   [bold]{self.get_stats()}[/]"
         else:
             info = f"[bold]{self.get_stats()}[/]   [dim]· /current <n> <min> to start a timer[/]"
 
-        return f"{big}\n[{color}]{bar}[/]\n{info}"
+        return f"{big}\n[{color}]{bar}[/]\n{telem}\n{info}"
 
     # ---------- STATS ----------
     def get_stats(self):
@@ -344,19 +523,11 @@ class TodoApp(App):
     # ---------- COLOR ----------
     def get_color(self, path):
         if not path:
-            return "#dddddd"
+            return "#33ff66"
 
+        # hash the top-level project name onto the neon terminal palette
         base = int(hashlib.md5(path[0].encode()).hexdigest(), 16)
-        r = (base >> 16) & 255
-        g = (base >> 8) & 255
-        b = base & 255
-
-        # normalize + boost contrast
-        def boost(x):
-            return min(255, int(100 + (x / 255) * 155))
-
-        r, g, b = boost(r), boost(g), boost(b)
-        return f"#{r:02x}{g:02x}{b:02x}"
+        return self.PALETTE[base % len(self.PALETTE)]
 
     # ---------- TAGS / FILTER ----------
     def all_tags(self):
@@ -423,7 +594,7 @@ class TodoApp(App):
     # ---------- GRAPH ----------
     def build_graph(self):
         if self.show_completed:
-            return "[gray]Viewing completed → /back[/]"
+            return "[#1f9c5a]// archive view — /back to return[/]"
 
         tree = {}
         for t in self.visible_tasks():
@@ -468,11 +639,11 @@ class TodoApp(App):
                     elif self.current_task_id and not t.completed:
                         style = "dim"
 
-                    prefix_mark = "👉 " if is_current else ""
+                    prefix_mark = "▶ " if is_current else ""
                     lines.append(
                         f"{prefix}{connector}[{style}]"
                         f"{prefix_mark}({display_id}) "
-                        f"{'✓ ' if t.completed else ''}{t.text}[/]"
+                        f"{'✓ ' if t.completed else ''}{self._display_text(t)}[/]"
                         + self.due_str(t)
                     )
 
@@ -496,20 +667,20 @@ class TodoApp(App):
 
             if is_current:
                 style = f"bold {base_color}"
-                prefix = "👉 "
+                prefix = "▶ "
             else:
                 style = f"{base_color}"
                 prefix = ""
 
             path = " / ".join(t.path) if t.path else "General"
             lines.append(
-                f"[{style}]{prefix}({i}) {t.text}[/] "
+                f"[{style}]{prefix}({i}) {self._display_text(t)}[/] "
                 f"[{base_color}][{path}][/]"
                 + self.due_str(t)
             )
 
         if not lines:
-            return "[gray]No tasks[/]"
+            return "[#1f9c5a]// no active tasks — awaiting input[/]"
         return "\n".join(lines)
 
     # ---------- COMPLETED ----------
@@ -529,7 +700,7 @@ class TodoApp(App):
                 lines.append(f"  ✓ {t.text}")
             lines.append("")
 
-        return "\n".join(lines) if lines else "[gray]No completed tasks[/]"
+        return "\n".join(lines) if lines else "[#1f9c5a]// no completed tasks logged[/]"
 
     # ---------- CLEANUP ----------
     def cleanup_completed_tasks(self):
@@ -694,8 +865,10 @@ class TodoApp(App):
         text, path, due = self.parse_task_input(raw)
         if not text:
             return
-        self.tasks.append(Task(self.task_id, text, path, due))
+        task = Task(self.task_id, text, path, due)
+        self.tasks.append(task)
         self.task_id += 1
+        self._start_reveal(task)        # decrypt-style reveal of the new text
 
     def apply_edit(self, raw):
         task = next((t for t in self.tasks if t.id == self.editing_task_id), None)
