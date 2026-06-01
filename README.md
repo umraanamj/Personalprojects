@@ -48,6 +48,10 @@ completion stats — all driven from a single command line at the bottom of the 
 - **Subtle sounds** — short system sounds on "win" moments (completing a task, finishing
   a Pomodoro, starting a focus timer). Cross-platform with no dependencies (macOS
   `afplay`, Windows `winsound`, Linux freedesktop sounds); toggle with `/sound`.
+- **Folder notes** — keep a free-form notes page per folder, independent of tasks.
+  `/notes <folder/path>` opens a full-screen editor; `/notes` (no path) opens a
+  searchable browser of all your notes. A folder can hold a note with no tasks (it
+  won't clutter the task views), and task-folders that have a note show a 📝 marker.
 - **Color themes** — switch the whole UI with `/theme <name>`. Ships a custom
   Cyberpunk-2077 theme (default) plus every built-in Textual palette: `dracula`,
   `gruvbox`, `nord`, `catppuccin-mocha`, `rose-pine`, `tokyo-night`, `monokai`,
@@ -104,6 +108,7 @@ All commands are typed into the input box. `<n>` refers to a task's number in th
 | `/back` | Leave the completed view |
 | `/clear all` | Delete all tasks and the archive |
 | `/export` | Write a readable report of completed tasks |
+| `/notes [folder/path]` | Edit a folder's note; no path opens the searchable notes browser |
 | `/sound` | Toggle completion/timer sounds on or off (persists) |
 | `/theme [name]` | Switch color theme; no name lists them all (e.g. `/theme dracula`) |
 | `/help` | Show in-app help |

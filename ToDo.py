@@ -1,5 +1,6 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Input, Static
+from textual.widgets import Header, Footer, Input, Static, TextArea, OptionList
+from textual.widgets.option_list import Option
 from textual.containers import Horizontal, VerticalScroll
 from textual.suggester import Suggester
 from textual.screen import Screen
@@ -236,6 +237,97 @@ class BootScreen(Screen):
             pass
 
 
+# ---------- NOTES ----------
+class NotesScreen(Screen):
+    """A full-page editor for one folder's note (Notion-style page)."""
+
+    BINDINGS = [
+        ("escape", "close", "save & close"),
+        ("ctrl+s", "save", "save"),
+    ]
+
+    def __init__(self, path):
+        super().__init__()
+        self.path = path
+
+    def compose(self) -> ComposeResult:
+        yield Static(f"  NOTE · {self.path}", id="note-title")
+        yield TextArea(self.app.notes.get(self.path, ""), id="note-edit")
+        yield Static("  Ctrl+S save  ·  Esc save & close", id="note-help")
+
+    def on_mount(self):
+        self.query_one("#note-edit").focus()
+
+    def _persist(self):
+        text = self.query_one("#note-edit").text.strip()
+        if text:
+            self.app.notes[self.path] = text
+        else:
+            self.app.notes.pop(self.path, None)  # empty note = no note
+        self.app.save_data()
+        self.app.refresh_all()
+
+    def action_save(self):
+        self._persist()
+        self.app.notify(f"Note saved · {self.path}")
+
+    def action_close(self):
+        self._persist()
+        self.app.pop_screen()
+
+
+class NotesBrowserScreen(Screen):
+    """Search folder paths and open their notes."""
+
+    BINDINGS = [("escape", "close", "close")]
+
+    def compose(self) -> ComposeResult:
+        yield Static("  NOTES — search a folder path, Enter to open", id="notes-title")
+        yield Input(placeholder="search… (or type a new path and press Enter to create)",
+                    id="notes-search")
+        yield OptionList(id="notes-list")
+        yield Static("  ↑↓ select · Enter open · Esc back", id="notes-help")
+
+    def on_mount(self):
+        self._populate("")
+        self.query_one("#notes-search").focus()
+
+    def on_screen_resume(self):
+        # refresh after returning from the editor (a note may have changed)
+        self._populate(self.query_one("#notes-search").value)
+
+    def _populate(self, query):
+        ol = self.query_one("#notes-list")
+        ol.clear_options()
+        q = query.strip().lower()
+        shown = 0
+        for path, text in sorted(self.app.notes.items()):
+            if q in path.lower():
+                snippet = " ".join(text.split())[:60]
+                ol.add_option(Option(f"{path}   —   {snippet}", id=path))
+                shown += 1
+        if shown == 0:
+            msg = "(type a path and press Enter to create a note)" if not self.app.notes \
+                else "(no match — type a path and press Enter to create)"
+            ol.add_option(Option(msg, id="__none__"))
+
+    def on_input_changed(self, event: Input.Changed):
+        self._populate(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted):
+        path = self.app._normalize_note_path(event.value)
+        if path:
+            self.app.push_screen(NotesScreen(path))
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected):
+        oid = event.option.id
+        if oid and oid != "__none__":
+            self.app.push_screen(NotesScreen(oid))
+
+    def action_close(self):
+        self.app.pop_screen()
+
+
 # ---------- APP ----------
 class TodoApp(App):
     TITLE = "TODO//2077"
@@ -244,6 +336,7 @@ class TodoApp(App):
     COMMANDS = [
         "/help", "/current", "/done", "/edit", "/due", "/delete", "/filter",
         "/completed", "/back", "/clear all", "/export", "/sound", "/theme",
+        "/notes",
     ]
 
     # All colors come from the active theme's variables, so /theme reskins the
@@ -297,6 +390,17 @@ class TodoApp(App):
     /* boot sequence overlay */
     BootScreen { background: $background; }
     #boot { padding: 2 4; color: $primary; text-style: bold; }
+
+    /* notes editor + browser pages */
+    NotesScreen, NotesBrowserScreen { background: $background; }
+    #note-title, #notes-title {
+        height: 1; padding: 0 1;
+        background: $primary; color: $background; text-style: bold;
+    }
+    #note-help, #notes-help { height: 1; padding: 0 1; color: $secondary; }
+    #note-edit { height: 1fr; border: round $accent; }
+    #notes-search { border: tall $primary; background: $panel; color: $foreground; }
+    #notes-list { height: 1fr; border: round $accent; }
     """
 
     def __init__(self):
@@ -311,6 +415,7 @@ class TodoApp(App):
         self.editing_task_id = None
         self.filter_tag = None
         self.filter_due = None
+        self.notes = {}  # folder-path string -> free-form note text
         # animation / telemetry state
         self.start_time = datetime.now()
         self.blink = False
@@ -615,6 +720,7 @@ class TodoApp(App):
             "task_id": self.task_id,
             "sound_on": self.sound_on,
             "theme": self.theme,
+            "notes": self.notes,
         }
         tmp = DATA_FILE + ".tmp"
         with open(tmp, "w") as f:
@@ -637,6 +743,7 @@ class TodoApp(App):
         self.task_id = data.get("task_id", 1)
         self.sound_on = data.get("sound_on", True)
         self._theme_name = data.get("theme", DEFAULT_THEME)
+        self.notes = data.get("notes", {})
 
     # ---------- EXPORT REPORT ----------
     def export_readable_report(self):
@@ -693,6 +800,16 @@ class TodoApp(App):
             for i, seg in enumerate(segs):
                 children.setdefault(tuple(segs[:i]), set()).add(seg)
         return children
+
+    # ---------- NOTES ----------
+    def _note_key(self, segs):
+        # canonical "Folder/Sub" key from a list of path segments
+        return "/".join(s.title() for s in segs if s)
+
+    def _normalize_note_path(self, raw):
+        # accept "/work/backend", "Work/Backend", etc. -> "Work/Backend"
+        parts = [s.strip() for s in raw.replace("\\", "/").split("/") if s.strip()]
+        return "/".join(s.title() for s in parts)
 
     def visible_tasks(self):
         tasks = self.tasks
@@ -777,7 +894,8 @@ class TodoApp(App):
             for i, k in enumerate(keys):
                 connector = "└── " if i == len(keys) - 1 else "├── "
                 color = self.get_color(path + [k])
-                lines.append(f"{prefix}{connector}[{color}]{k}[/]")
+                note_mark = " 📝" if self._note_key(path + [k]) in self.notes else ""
+                lines.append(f"{prefix}{connector}[{color}]{k}[/]{note_mark}")
                 walk(node[k], prefix + ("    " if i == len(keys) - 1 else "│   "), path + [k])
 
             if "_tasks" in node:
@@ -1200,6 +1318,16 @@ class TodoApp(App):
             self.notify(f"Sound {'ON' if self.sound_on else 'OFF'}")
             self._play("toggle")
 
+        elif parts[0] in ("/notes", "/note"):
+            if len(parts) > 1:
+                path = self._normalize_note_path(" ".join(parts[1:]))
+                if path:
+                    self.push_screen(NotesScreen(path))
+                else:
+                    self.notify("Usage: /notes <folder/path>   (or /notes to browse)")
+            else:
+                self.push_screen(NotesBrowserScreen())
+
         elif parts[0] == "/theme":
             if len(parts) > 1:
                 name = parts[1].lower()
@@ -1232,6 +1360,7 @@ class TodoApp(App):
                 "/clear all              delete all tasks and archive\n"
                 "/export                 write completed_report.txt\n"
                 "/sound                  toggle completion/timer sounds\n"
+                "/notes [folder/path]    edit a folder's note (blank = search notes)\n"
                 "/theme [name]           switch color theme (blank = list; e.g. dracula)\n"
                 "/help                   show this help\n",
                 timeout=18
