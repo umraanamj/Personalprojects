@@ -44,7 +44,10 @@ completion stats — all driven from a single command line at the bottom of the 
   fill the status bar, color-shifting green → amber → red as time runs out, and you get
   a notification when it completes.
 - **Completion stats** — the status bar tracks tasks completed today, this week, this
-  month, this year, and in total.
+  month, this year, and in total. `/stats` opens a full **productivity dashboard**:
+  most-productive day this week/month/year, best day ever, top month, busiest weekday,
+  current & longest streaks, daily average, top projects, and an open-task breakdown
+  (overdue / due today / due ≤7d / no date).
 - **Subtle sounds** — short system sounds on "win" moments (completing a task, finishing
   a Pomodoro, starting a focus timer). Cross-platform with no dependencies (macOS
   `afplay`, Windows `winsound`, Linux freedesktop sounds); toggle with `/sound`.
@@ -104,6 +107,7 @@ All commands are typed into the input box. `<n>` refers to a task's number in th
 | `/delete <n>` | Delete task `n` |
 | `/filter <tag>` | Show only tasks with `#tag` (no tag = clear) |
 | `/filter due <when>` | Filter by due date: `today`, `tomorrow`, `week`, `overdue`, or a date |
+| `/stats` | Open the productivity dashboard |
 | `/completed` | View completed tasks, grouped by day |
 | `/back` | Leave the completed view |
 | `/clear all` | Delete all tasks and the archive |

@@ -19,6 +19,7 @@ import io
 import wave
 import struct
 import math
+from collections import Counter
 
 # glyphs used for the "decrypt" scramble effect and title glitch
 SCRAMBLE_GLYPHS = "!@#$%&*+=/\\<>?▓▒░01x"
@@ -328,6 +329,22 @@ class NotesBrowserScreen(Screen):
         self.app.pop_screen()
 
 
+# ---------- STATS ----------
+class StatsScreen(Screen):
+    """Scrollable productivity dashboard."""
+
+    BINDINGS = [("escape", "close", "close")]
+
+    def compose(self) -> ComposeResult:
+        yield Static("  📊 STATS", id="stats-title")
+        with VerticalScroll(id="stats-scroll"):
+            yield Static(self.app.render_stats(), id="stats-body")
+        yield Static("  Esc back", id="stats-help")
+
+    def action_close(self):
+        self.app.pop_screen()
+
+
 # ---------- APP ----------
 class TodoApp(App):
     TITLE = "TODO//2077"
@@ -336,7 +353,7 @@ class TodoApp(App):
     COMMANDS = [
         "/help", "/current", "/done", "/edit", "/due", "/delete", "/filter",
         "/completed", "/back", "/clear all", "/export", "/sound", "/theme",
-        "/notes",
+        "/notes", "/stats",
     ]
 
     # All colors come from the active theme's variables, so /theme reskins the
@@ -401,6 +418,13 @@ class TodoApp(App):
     #note-edit { height: 1fr; border: round $accent; }
     #notes-search { border: tall $primary; background: $panel; color: $foreground; }
     #notes-list { height: 1fr; border: round $accent; }
+
+    /* stats dashboard */
+    StatsScreen { background: $background; }
+    #stats-title { height: 1; padding: 0 1; background: $primary; color: $background; text-style: bold; }
+    #stats-help { height: 1; padding: 0 1; color: $secondary; }
+    #stats-scroll { height: 1fr; border: round $accent; padding: 1 2; }
+    #stats-body { height: auto; }
     """
 
     def __init__(self):
@@ -711,6 +735,125 @@ class TodoApp(App):
         )
 
         return f"Today {day}  ·  Week {week}  ·  Month {month}  ·  Year {year}  ·  Total {len(all_tasks)}"
+
+    # ---------- DETAILED STATS ----------
+    def detailed_stats(self):
+        done = [t for t in (self.archived_tasks + [x for x in self.tasks if x.completed])
+                if t.completed_at]
+        now = datetime.now()
+        today = now.date()
+        week_start = today - timedelta(days=now.weekday())
+
+        day_counts = Counter(t.completed_at.date() for t in done)
+
+        def top_day(pred):
+            cand = [(d, c) for d, c in day_counts.items() if pred(d)]
+            return max(cand, key=lambda x: (x[1], x[0])) if cand else None
+
+        # current streak: consecutive days with completions ending today (or
+        # yesterday, so an unfinished today doesn't read as a broken streak)
+        def run_back(start):
+            n, d = 0, start
+            while day_counts.get(d, 0) > 0:
+                n += 1
+                d -= timedelta(days=1)
+            return n
+        current_streak = run_back(today) or run_back(today - timedelta(days=1))
+
+        # longest streak ever
+        longest = 0
+        for d in sorted(day_counts):
+            longest = max(longest, run_back(d))
+
+        open_tasks = [t for t in self.tasks if not t.completed]
+        return {
+            "today": day_counts.get(today, 0),
+            "week": sum(c for d, c in day_counts.items() if week_start <= d <= today),
+            "month": sum(c for d, c in day_counts.items()
+                         if d.year == now.year and d.month == now.month),
+            "year": sum(c for d, c in day_counts.items() if d.year == now.year),
+            "total": len(done),
+            "week_top": top_day(lambda d: week_start <= d <= today),
+            "month_top": top_day(lambda d: d.year == now.year and d.month == now.month),
+            "year_top": top_day(lambda d: d.year == now.year),
+            "best_day": top_day(lambda d: True),
+            "top_month": (Counter(t.completed_at.month for t in done
+                                  if t.completed_at.year == now.year).most_common(1) or [None])[0],
+            "busiest_wd": (Counter(t.completed_at.weekday() for t in done).most_common(1)
+                           or [None])[0],
+            "current_streak": current_streak,
+            "longest_streak": longest,
+            "avg_month": (sum(c for d, c in day_counts.items()
+                          if d.year == now.year and d.month == now.month) / today.day),
+            "top_projects": Counter((t.path[0] if t.path else "General")
+                                    for t in done).most_common(5),
+            "open": len(open_tasks),
+            "overdue": sum(1 for t in open_tasks if t.due and t.due < today),
+            "due_today": sum(1 for t in open_tasks if t.due == today),
+            "due_week": sum(1 for t in open_tasks
+                            if t.due and today <= t.due <= today + timedelta(days=7)),
+            "no_due": sum(1 for t in open_tasks if not t.due),
+        }
+
+    def render_stats(self):
+        WD = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        MO = ["", "January", "February", "March", "April", "May", "June", "July",
+              "August", "September", "October", "November", "December"]
+        p = self._palette()
+        s = self.detailed_stats()
+
+        if s["total"] == 0:
+            return f"[{self._muted()}]// no completed tasks yet — finish one with /done <n>[/]"
+
+        def hdr(t):
+            return f"[bold {p.primary}]{t}[/]"
+
+        def daystr(pair):
+            if not pair:
+                return f"[{self._muted()}]—[/]"
+            d, c = pair
+            return f"[{p.accent}]{d.strftime('%a %b %d')}[/]  [{p.secondary}]{c} done[/]"
+
+        lines = []
+        lines.append(hdr("COMPLETED"))
+        lines.append(f"  Today        {s['today']}")
+        lines.append(f"  This week    {s['week']}")
+        lines.append(f"  This month   {s['month']}")
+        lines.append(f"  This year    {s['year']}")
+        lines.append(f"  Total        {s['total']}")
+        lines.append("")
+        lines.append(hdr("MOST PRODUCTIVE DAY"))
+        lines.append(f"  This week    {daystr(s['week_top'])}")
+        lines.append(f"  This month   {daystr(s['month_top'])}")
+        lines.append(f"  This year    {daystr(s['year_top'])}")
+        lines.append(f"  Best ever    {daystr(s['best_day'])}")
+        if s["top_month"]:
+            lines.append(f"  Top month    [{p.accent}]{MO[s['top_month'][0]]}[/]  "
+                         f"[{p.secondary}]{s['top_month'][1]} done[/]")
+        if s["busiest_wd"] is not None:
+            lines.append(f"  Busiest day  [{p.accent}]{WD[s['busiest_wd'][0]]}[/]")
+        lines.append("")
+        lines.append(hdr("MOMENTUM"))
+        lines.append(f"  Current streak   [{p.accent}]{s['current_streak']} day(s)[/]")
+        lines.append(f"  Longest streak   {s['longest_streak']} day(s)")
+        lines.append(f"  Avg this month   {s['avg_month']:.1f} / day")
+        lines.append("")
+        lines.append(hdr("TOP PROJECTS"))
+        if s["top_projects"]:
+            width = max(len(name) for name, _ in s["top_projects"])
+            for name, c in s["top_projects"]:
+                bar = "█" * min(c, 20)
+                lines.append(f"  {name:<{width}}  [{self.get_color([name])}]{bar}[/] {c}")
+        else:
+            lines.append(f"  [{self._muted()}]—[/]")
+        lines.append("")
+        lines.append(hdr("OPEN NOW"))
+        lines.append(f"  Open tasks   {s['open']}")
+        lines.append(f"  Overdue      [{p.error}]{s['overdue']}[/]")
+        lines.append(f"  Due today    [{p.warning}]{s['due_today']}[/]")
+        lines.append(f"  Due ≤ 7d     {s['due_week']}")
+        lines.append(f"  No due date  {s['no_due']}")
+        return "\n".join(lines)
 
     # ---------- SAVE / LOAD ----------
     def save_data(self):
@@ -1293,6 +1436,9 @@ class TodoApp(App):
                 self.filter_due = None
                 self.notify("Filter cleared")
 
+        elif cmd == "/stats":
+            self.push_screen(StatsScreen())
+
         elif cmd == "/completed":
             self.show_completed = True
 
@@ -1355,6 +1501,7 @@ class TodoApp(App):
                 "/delete <n>             delete task n\n"
                 "/filter <tag>           show only tasks with #tag (blank = clear)\n"
                 "/filter due <when>      by due date: today|tomorrow|week|overdue|YYYY-MM-DD\n"
+                "/stats                  productivity dashboard\n"
                 "/completed              view completed tasks\n"
                 "/back                   leave the completed view\n"
                 "/clear all              delete all tasks and archive\n"
