@@ -80,13 +80,14 @@ BIG = {
 
 # ---------- TASK ----------
 class Task:
-    def __init__(self, id, text, path=None, due=None):
+    def __init__(self, id, text, path=None, due=None, created_at=None):
         self.id = id
         self.text = text
         self.path = path or []
         self.due = due
         self.completed = False
         self.completed_at = None
+        self.created_at = created_at  # when the task was added (for time-to-complete)
 
     def to_dict(self):
         return {
@@ -95,7 +96,8 @@ class Task:
             "path": self.path,
             "due": self.due.isoformat() if self.due else None,
             "completed": self.completed,
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
     @staticmethod
@@ -106,6 +108,8 @@ class Task:
             t.due = date.fromisoformat(data["due"])
         if data.get("completed_at"):
             t.completed_at = datetime.fromisoformat(data["completed_at"])
+        if data.get("created_at"):
+            t.created_at = datetime.fromisoformat(data["created_at"])
         return t
 
 
@@ -765,8 +769,30 @@ class TodoApp(App):
         for d in sorted(day_counts):
             longest = max(longest, run_back(d))
 
+        # last 7 days of activity (oldest -> newest), for the sparkline
+        last7 = [day_counts.get(today - timedelta(days=i), 0) for i in range(6, -1, -1)]
+
+        # average time from creation to completion (only tasks that recorded it)
+        durations = [(t.completed_at - t.created_at).total_seconds()
+                     for t in done if t.created_at and t.completed_at >= t.created_at]
+        avg_secs = sum(durations) / len(durations) if durations else None
+
+        # completion rate: done vs. (done + still-open) currently tracked
         open_tasks = [t for t in self.tasks if not t.completed]
+        denom = len(done) + len(open_tasks)
+        rate = round(len(done) / denom * 100) if denom else 0
+
+        # top #tags among completed tasks
+        tag_counts = Counter(
+            tok for t in done for tok in t.text.split()
+            if tok.startswith("#") and len(tok) > 1
+        ).most_common(5)
+
         return {
+            "last7": last7,
+            "avg_secs": avg_secs,
+            "rate": rate,
+            "tag_counts": tag_counts,
             "today": day_counts.get(today, 0),
             "week": sum(c for d, c in day_counts.items() if week_start <= d <= today),
             "month": sum(c for d, c in day_counts.items()
@@ -833,11 +859,39 @@ class TodoApp(App):
         if s["busiest_wd"] is not None:
             lines.append(f"  Busiest day  [{p.accent}]{WD[s['busiest_wd'][0]]}[/]")
         lines.append("")
+        def fmt_dur(secs):
+            if secs is None:
+                return f"[{self._muted()}]—[/]"
+            if secs >= 86400:
+                return f"{secs / 86400:.1f} days"
+            if secs >= 3600:
+                return f"{secs / 3600:.1f} h"
+            return f"{secs / 60:.0f} min"
+
         lines.append(hdr("MOMENTUM"))
         lines.append(f"  Current streak   [{p.accent}]{s['current_streak']} day(s)[/]")
         lines.append(f"  Longest streak   {s['longest_streak']} day(s)")
         lines.append(f"  Avg this month   {s['avg_month']:.1f} / day")
+        lines.append(f"  Completion rate  {s['rate']}%  [{self._muted()}](done vs open)[/]")
+        lines.append(f"  Avg to complete  {fmt_dur(s['avg_secs'])}")
         lines.append("")
+        lines.append(hdr("LAST 7 DAYS"))
+        BLOCKS = " ▁▂▃▄▅▆▇█"
+        last7 = s["last7"]
+        mx = max(last7) or 1
+        spark = "".join(BLOCKS[min(8, round(v / mx * 8))] for v in last7)
+        # weekday initials aligned under each spark cell (oldest -> newest = ... -> today)
+        today = datetime.now().date()
+        inits = "".join("MTWTFSS"[(today - timedelta(days=i)).weekday()] for i in range(6, -1, -1))
+        lines.append(f"  [{p.accent}]{spark}[/]   [{p.secondary}]{sum(last7)} this week-window[/]")
+        lines.append(f"  [{self._muted()}]{inits}[/]  [{self._muted()}](→ today)[/]")
+        lines.append("")
+        if s["tag_counts"]:
+            lines.append(hdr("TOP TAGS"))
+            twidth = max(len(t) for t, _ in s["tag_counts"])
+            for tag, c in s["tag_counts"]:
+                lines.append(f"  [{p.accent}]{tag:<{twidth}}[/]  {c}")
+            lines.append("")
         lines.append(hdr("TOP PROJECTS"))
         if s["top_projects"]:
             width = max(len(name) for name, _ in s["top_projects"])
@@ -1302,7 +1356,7 @@ class TodoApp(App):
         text, path, due = self.parse_task_input(raw)
         if not text:
             return
-        task = Task(self.task_id, text, path, due)
+        task = Task(self.task_id, text, path, due, created_at=datetime.now())
         self.tasks.append(task)
         self.task_id += 1
         self._start_reveal(task)        # decrypt-style reveal of the new text

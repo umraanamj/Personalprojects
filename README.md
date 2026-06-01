@@ -46,7 +46,8 @@ completion stats — all driven from a single command line at the bottom of the 
 - **Completion stats** — the status bar tracks tasks completed today, this week, this
   month, this year, and in total. `/stats` opens a full **productivity dashboard**:
   most-productive day this week/month/year, best day ever, top month, busiest weekday,
-  current & longest streaks, daily average, top projects, and an open-task breakdown
+  current & longest streaks, daily average, completion rate, average time-to-complete,
+  a 7-day activity sparkline, top tags, top projects, and an open-task breakdown
   (overdue / due today / due ≤7d / no date).
 - **Subtle sounds** — short system sounds on "win" moments (completing a task, finishing
   a Pomodoro, starting a focus timer). Cross-platform with no dependencies (macOS
