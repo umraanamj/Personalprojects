@@ -14,9 +14,22 @@ import colorsys
 import sys
 import shutil
 import subprocess
+import io
+import wave
+import struct
+import math
 
 # glyphs used for the "decrypt" scramble effect and title glitch
 SCRAMBLE_GLYPHS = "!@#$%&*+=/\\<>?▓▒░01x"
+
+# short synthesized "technical" blips per event: lists of (frequency_hz, ms).
+# ascending tones read as a sci-fi UI confirm rather than a notification chime.
+TECH_TONES = {
+    "complete": [(784, 70), (1175, 90)],            # G5 -> D6, satisfying confirm
+    "win":      [(784, 80), (988, 80), (1319, 150)],  # G5-B5-E6 arpeggio, bigger reward
+    "start":    [(659, 60)],                          # E5 single blip
+    "toggle":   [(1047, 40)],                         # C6 tick
+}
 
 # our signature Cyberpunk 2077 look, registered alongside Textual's built-in
 # themes (dracula, gruvbox, catppuccin-*, nord, rose-pine, tokyo-night, ...)
@@ -291,6 +304,7 @@ class TodoApp(App):
         self._theme_name = DEFAULT_THEME
         # sound: little dopamine hits on "win" events (cross-platform, no deps)
         self.sound_on = True
+        self._wav_ref = None                             # keeps win32 buffer alive
         self._afplay = shutil.which("afplay")            # macOS
         self._linux_player = (                           # linux best-effort
             shutil.which("canberra-gtk-play") or shutil.which("paplay")
@@ -406,6 +420,31 @@ class TodoApp(App):
         return t.text[:n] + tail
 
     # ---------- SOUND ----------
+    @staticmethod
+    def _synth_wav(tones, volume=0.3, rate=22050):
+        """Build a small mono 16-bit WAV (in memory) from (freq, ms) tones,
+        with a short fade on each tone so there are no clicks."""
+        fade = int(rate * 0.005)
+        frames = bytearray()
+        for freq, ms in tones:
+            n = int(rate * ms / 1000)
+            for i in range(n):
+                if i < fade:
+                    env = i / fade
+                elif i > n - fade:
+                    env = max(0.0, (n - i) / fade)
+                else:
+                    env = 1.0
+                sample = int(volume * env * 32767 * math.sin(2 * math.pi * freq * i / rate))
+                frames += struct.pack("<h", sample)
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(bytes(frames))
+        return buf.getvalue()
+
     def _play(self, event):
         """Fire a short system sound for a 'win' event. Non-blocking, best-effort,
         cross-platform; silently does nothing if no audio backend is available."""
@@ -423,10 +462,9 @@ class TodoApp(App):
                     )
             elif sys.platform == "win32":
                 import winsound
-                alias = {"complete": "SystemAsterisk", "win": "SystemExclamation",
-                         "start": "SystemDefault", "toggle": "SystemDefault"}.get(
-                    event, "SystemDefault")
-                winsound.PlaySound(alias, winsound.SND_ALIAS | winsound.SND_ASYNC)
+                data = self._synth_wav(TECH_TONES.get(event, TECH_TONES["toggle"]))
+                self._wav_ref = data  # keep buffer alive during async playback
+                winsound.PlaySound(data, winsound.SND_MEMORY | winsound.SND_ASYNC)
             elif self._linux_player:
                 if self._linux_player.endswith("canberra-gtk-play"):
                     cid = {"complete": "complete", "win": "complete",
