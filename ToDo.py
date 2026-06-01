@@ -49,7 +49,32 @@ CP2077_THEME = Theme(
     error="#ff3b3b",
     dark=True,
 )
+DEDSEC_THEME = Theme(
+    name="dedsec",
+    primary="#00e08a",     # spray green
+    secondary="#8a8f98",   # concrete grey
+    accent="#ff2e7e",      # spray magenta
+    foreground="#e8ffe8",
+    background="#0a0a0a",
+    surface="#121212",
+    panel="#161616",
+    success="#00e08a",
+    warning="#ff9e3d",
+    error="#ff3b3b",
+    dark=True,
+)
 DEFAULT_THEME = "cp2077"
+
+# DedSec (Watch Dogs 2) flair — shown once on the boot screen, then gone.
+DEDSEC_SKULL = r"""
+   .-=======-.
+  /  _     _  \
+ |  (_)   (_)  |
+ |      ^      |
+  \   '---'   /
+   `|| | | ||`
+     DEDSEC
+"""
 
 # ---------- STORAGE ----------
 DATA_DIR = os.path.join(os.path.expanduser("~"), "TodoApp")
@@ -195,11 +220,11 @@ class BootScreen(Screen):
     """A throwaway startup log that types itself out, then drops into the app."""
 
     LINES = [
-        "> JACKING IN ...",
-        "> NETRUNNER OS  v2.077",
-        "> MOUNTING ~/TodoApp ........... OK",
-        "> BREACHING ICE [{n}] .......... OK",
-        "> ACCESS GRANTED — WELCOME, CHOOM",
+        "> CONNECTING TO ctOS ...",
+        "> SPOOFING CREDENTIALS ........ OK",
+        "> BREACHING NODE [{n}] ........ OK",
+        "> WE ARE DEDSEC.",
+        "> ACCESS GRANTED",
     ]
 
     def __init__(self, active):
@@ -210,6 +235,7 @@ class BootScreen(Screen):
         self._done = False
 
     def compose(self) -> ComposeResult:
+        yield Static(DEDSEC_SKULL, id="boot-skull")
         self.log_view = Static("", id="boot")
         yield self.log_view
 
@@ -410,7 +436,8 @@ class TodoApp(App):
 
     /* boot sequence overlay */
     BootScreen { background: $background; }
-    #boot { padding: 2 4; color: $primary; text-style: bold; }
+    #boot-skull { padding: 1 4 0 4; color: $accent; text-style: bold; }
+    #boot { padding: 0 4 2 4; color: $primary; text-style: bold; }
 
     /* notes editor + browser pages */
     NotesScreen, NotesBrowserScreen { background: $background; }
@@ -489,6 +516,7 @@ class TodoApp(App):
 
     def on_mount(self):
         self.register_theme(CP2077_THEME)
+        self.register_theme(DEDSEC_THEME)
         self.query_one("#graph-scroll").border_title = "[ PROJECTS ]"
         self.query_one("#tasks-scroll").border_title = "[ TASKS ]"
         self.load_data()
