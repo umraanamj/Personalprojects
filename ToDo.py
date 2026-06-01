@@ -3,6 +3,7 @@ from textual.widgets import Header, Footer, Input, Static
 from textual.containers import Horizontal, VerticalScroll
 from textual.suggester import Suggester
 from textual.screen import Screen
+from textual.theme import Theme
 from datetime import datetime, timedelta, date
 import hashlib
 import json
@@ -16,6 +17,24 @@ import subprocess
 
 # glyphs used for the "decrypt" scramble effect and title glitch
 SCRAMBLE_GLYPHS = "!@#$%&*+=/\\<>?▓▒░01x"
+
+# our signature Cyberpunk 2077 look, registered alongside Textual's built-in
+# themes (dracula, gruvbox, catppuccin-*, nord, rose-pine, tokyo-night, ...)
+CP2077_THEME = Theme(
+    name="cp2077",
+    primary="#f3e600",     # neon yellow
+    secondary="#00b8cc",   # dim cyan
+    accent="#00e5ff",      # bright cyan
+    foreground="#e8fbff",
+    background="#0b0d0f",
+    surface="#11171a",
+    panel="#11171a",
+    success="#00e5ff",
+    warning="#f3e600",
+    error="#ff3b3b",
+    dark=True,
+)
+DEFAULT_THEME = "cp2077"
 
 # ---------- STORAGE ----------
 DATA_DIR = os.path.join(os.path.expanduser("~"), "TodoApp")
@@ -193,16 +212,17 @@ class TodoApp(App):
 
     COMMANDS = [
         "/help", "/current", "/done", "/edit", "/due", "/delete", "/filter",
-        "/completed", "/back", "/clear all", "/export", "/sound",
+        "/completed", "/back", "/clear all", "/export", "/sound", "/theme",
     ]
 
+    # All colors come from the active theme's variables, so /theme reskins the
+    # whole UI at once (works for cp2077 and every built-in Textual theme).
     CSS = """
-    /* ---- cyberpunk 2077 theme: neon yellow + cyan on black ---- */
-    Screen { layout: vertical; background: #0b0d0f; color: #e8fbff; }
+    Screen { layout: vertical; background: $background; color: $foreground; }
 
-    /* iconic yellow title bar; cyan footer */
-    Header { background: #f3e600; color: #0b0d0f; text-style: bold; }
-    Footer { background: #11171a; color: #00e5ff; }
+    /* title bar tinted with the theme's primary; footer on its panel color */
+    Header { background: $primary; color: $background; text-style: bold; }
+    Footer { background: $panel; color: $secondary; }
 
     /* main panes take all the flexible space, pushing the rest to the bottom */
     #main { height: 1fr; }
@@ -211,41 +231,41 @@ class TodoApp(App):
        the wrapper can scroll when there are more tasks than fit on screen */
     #graph-scroll {
         width: 65%; height: 1fr;
-        border: round #f3e600;
-        border-title-color: #f3e600; border-title-align: left;
-        scrollbar-color: #f3e600; scrollbar-background: #0b0d0f;
+        border: round $primary;
+        border-title-color: $primary; border-title-align: left;
+        scrollbar-color: $primary; scrollbar-background: $surface;
     }
     #tasks-scroll {
         width: 35%; height: 1fr;
-        border: round #00e5ff;
-        border-title-color: #00e5ff; border-title-align: left;
-        scrollbar-color: #00e5ff; scrollbar-background: #0b0d0f;
+        border: round $accent;
+        border-title-color: $accent; border-title-align: left;
+        scrollbar-color: $accent; scrollbar-background: $surface;
     }
     #graph, #tasks { padding: 1; height: auto; }
 
     /* status bar: big pomodoro timer + loading bar + stats (not docked) */
     #status {
         height: 7;
-        border-top: heavy #f3e600;
+        border-top: heavy $primary;
         padding: 0 1;
-        color: #e8fbff;
+        color: $foreground;
     }
 
     /* faded contextual hint line, sits just above the input */
-    #hint { height: 1; padding: 0 1; color: #4f7a85; }
+    #hint { height: 1; padding: 0 1; color: $secondary; }
 
     /* input sits just above the footer in normal flow */
     #cmd {
         height: 3;
-        border: tall #f3e600;
-        background: #11171a;
-        color: #e8fbff;
+        border: tall $primary;
+        background: $panel;
+        color: $foreground;
     }
-    #cmd:focus { border: tall #00e5ff; }
+    #cmd:focus { border: tall $accent; }
 
     /* boot sequence overlay */
-    BootScreen { background: #0b0d0f; }
-    #boot { padding: 2 4; color: #f3e600; text-style: bold; }
+    BootScreen { background: $background; }
+    #boot { padding: 2 4; color: $primary; text-style: bold; }
     """
 
     def __init__(self):
@@ -267,6 +287,8 @@ class TodoApp(App):
         self._title_base = self.TITLE
         self._reveal = None
         self._reveal_timer = None
+        # selected color theme (applied in on_mount once the app is running)
+        self._theme_name = DEFAULT_THEME
         # sound: little dopamine hits on "win" events (cross-platform, no deps)
         self.sound_on = True
         self._afplay = shutil.which("afplay")            # macOS
@@ -301,9 +323,12 @@ class TodoApp(App):
         yield Footer()
 
     def on_mount(self):
+        self.register_theme(CP2077_THEME)
         self.query_one("#graph-scroll").border_title = "[ PROJECTS ]"
         self.query_one("#tasks-scroll").border_title = "[ TASKS ]"
         self.load_data()
+        # apply the saved theme (fall back to default if it's unknown)
+        self.theme = self._theme_name if self._theme_name in self.available_themes else DEFAULT_THEME
         self.refresh_all()
         self.set_interval(30, self.cleanup_completed_tasks)
         self.set_interval(1, self.update_timer)
@@ -311,6 +336,17 @@ class TodoApp(App):
         self.set_interval(3.0, self._glitch_title)  # occasional title glitch
         active = len([t for t in self.tasks if not t.completed])
         self.push_screen(BootScreen(active))        # typed startup log
+
+    # ---------- THEME PALETTE (for dynamic markup colors) ----------
+    def _palette(self):
+        # the active theme object; its .primary/.accent/.error/... are hex strings
+        try:
+            return self.get_theme(self.theme)
+        except Exception:
+            return self.get_theme(DEFAULT_THEME)
+
+    def _muted(self):
+        return self._palette().secondary
 
     # ---------- LIVE TELEMETRY / EFFECTS ----------
     def _heartbeat(self):
@@ -439,14 +475,15 @@ class TodoApp(App):
     def render_big_timer(self):
         txt = self.format_timer()
         prog = self.timer_progress()
+        p = self._palette()
 
         if prog:
             remaining, total, frac = prog
             rem_frac = remaining / total if total else 0
-            color = "#00e5ff" if rem_frac > 0.5 else ("#f3e600" if rem_frac > 0.2 else "#ff3b3b")
+            color = p.success if rem_frac > 0.5 else (p.warning if rem_frac > 0.2 else p.error)
         else:
             frac = 0.0
-            color = "#f3e600"
+            color = p.primary
 
         # blink the colon once per heartbeat while a timer is running
         if prog and not self.blink:
@@ -468,16 +505,16 @@ class TodoApp(App):
         cells = []
         for i in range(bar_w):
             ch = "█" if i < filled else "░"
-            cells.append(f"[#e8fbff]{ch}[/]" if i == shimmer else ch)
+            cells.append(f"[{p.foreground}]{ch}[/]" if i == shimmer else ch)
         bar = "".join(cells)
 
         # telemetry line: pulsing REC dot, uptime, live buffer count
-        rec = "[#ff3b3b]●[/]" if self.blink else "[#4a1414]●[/]"
+        rec = f"[{p.error}]●[/]" if self.blink else "[#444444]●[/]"
         active = len([t for t in self.tasks if not t.completed])
         telem = (
-            f"{rec} [bold #ff3b3b]REC[/]   "
-            f"[#2f8a99]uptime {self._uptime_str()}[/]   "
-            f"[#2f8a99]buffer: {active}[/]"
+            f"{rec} [bold {p.error}]REC[/]   "
+            f"[{p.secondary}]uptime {self._uptime_str()}[/]   "
+            f"[{p.secondary}]buffer: {active}[/]"
         )
 
         if prog:
@@ -521,6 +558,7 @@ class TodoApp(App):
             "archived": [t.to_dict() for t in self.archived_tasks],
             "task_id": self.task_id,
             "sound_on": self.sound_on,
+            "theme": self.theme,
         }
         tmp = DATA_FILE + ".tmp"
         with open(tmp, "w") as f:
@@ -542,6 +580,7 @@ class TodoApp(App):
         self.archived_tasks = [Task.from_dict(t) for t in data.get("archived", [])]
         self.task_id = data.get("task_id", 1)
         self.sound_on = data.get("sound_on", True)
+        self._theme_name = data.get("theme", DEFAULT_THEME)
 
     # ---------- EXPORT REPORT ----------
     def export_readable_report(self):
@@ -645,7 +684,9 @@ class TodoApp(App):
     # ---------- GRAPH ----------
     def build_graph(self):
         if self.show_completed:
-            return "[#4f7a85]// archive view — /back to return[/]"
+            return f"[{self._muted()}]// archive view — /back to return[/]"
+
+        p = self._palette()
 
         tree = {}
         for t in self.visible_tasks():
@@ -660,7 +701,7 @@ class TodoApp(App):
 
         lines = []
         if self.filter_tag or self.filter_due:
-            lines.append(f"[yellow]Filter: {self.filter_label()} (/filter to clear)[/]")
+            lines.append(f"[{p.warning}]Filter: {self.filter_label()} (/filter to clear)[/]")
 
         def walk(node, prefix="", path=None):
             path = path or []
@@ -686,7 +727,7 @@ class TodoApp(App):
 
                     style = self.get_color(t.path)
                     if is_current:
-                        style = "bold #f3e600"
+                        style = f"bold {p.accent}"
                     elif self.current_task_id and not t.completed:
                         style = "dim"
 
@@ -707,10 +748,11 @@ class TodoApp(App):
             return self.build_completed_view()
 
         open_tasks = self.get_open_tasks_ordered()
+        p = self._palette()
 
         lines = []
         if self.filter_tag or self.filter_due:
-            lines.append(f"[yellow]Filter: {self.filter_label()}[/]")
+            lines.append(f"[{p.warning}]Filter: {self.filter_label()}[/]")
 
         for i, t in enumerate(open_tasks, start=1):
             is_current = t.id == self.current_task_id
@@ -731,7 +773,7 @@ class TodoApp(App):
             )
 
         if not lines:
-            return "[#4f7a85]// no active tasks — awaiting input[/]"
+            return f"[{self._muted()}]// no active tasks — awaiting input[/]"
         return "\n".join(lines)
 
     # ---------- COMPLETED ----------
@@ -745,13 +787,14 @@ class TodoApp(App):
                 grouped.setdefault(day, []).append(t)
 
         lines = []
+        warn = self._palette().warning
         for day in sorted(grouped.keys(), reverse=True):
-            lines.append(f"[yellow]{day}[/]")
+            lines.append(f"[{warn}]{day}[/]")
             for t in grouped[day]:
                 lines.append(f"  ✓ {t.text}")
             lines.append("")
 
-        return "\n".join(lines) if lines else "[#4f7a85]// no completed tasks logged[/]"
+        return "\n".join(lines) if lines else f"[{self._muted()}]// no completed tasks logged[/]"
 
     # ---------- CLEANUP ----------
     def cleanup_completed_tasks(self):
@@ -862,15 +905,16 @@ class TodoApp(App):
         # Small colored badge shown after a task; "" when no due date.
         if not t.due:
             return ""
+        p = self._palette()
         delta = (t.due - datetime.now().date()).days
         if delta < 0:
-            color, label = "bold #ff3b3b", f"overdue {-delta}d"
+            color, label = f"bold {p.error}", f"overdue {-delta}d"
         elif delta == 0:
-            color, label = "bold #f3e600", "today"
+            color, label = f"bold {p.warning}", "today"
         elif delta == 1:
-            color, label = "#00e5ff", "tomorrow"
+            color, label = p.accent, "tomorrow"
         elif delta <= 7:
-            color, label = "#00b8cc", t.due.strftime("%a")
+            color, label = p.secondary, t.due.strftime("%a")
         else:
             color, label = "#6b7a80", t.due.isoformat()
         return f" [{color}]⏳{label}[/]"
@@ -1075,6 +1119,19 @@ class TodoApp(App):
             self.notify(f"Sound {'ON' if self.sound_on else 'OFF'}")
             self._play("toggle")
 
+        elif parts[0] == "/theme":
+            if len(parts) > 1:
+                name = parts[1].lower()
+                if name in self.available_themes:
+                    self.theme = name
+                    self._theme_name = name
+                    self.notify(f"Theme: {name}")
+                else:
+                    self.notify(f"Unknown theme '{name}'. Type /theme to list them.")
+            else:
+                names = "  ".join(sorted(self.available_themes))
+                self.notify(f"Current: {self.theme}\nThemes: {names}\nUse /theme <name>", timeout=15)
+
         elif cmd == "/help":
             self.notify(
                 "ADD TASK: text, optional 'project/sub', optional '@due'\n"
@@ -1094,6 +1151,7 @@ class TodoApp(App):
                 "/clear all              delete all tasks and archive\n"
                 "/export                 write completed_report.txt\n"
                 "/sound                  toggle completion/timer sounds\n"
+                "/theme [name]           switch color theme (blank = list; e.g. dracula)\n"
                 "/help                   show this help\n",
                 timeout=18
             )

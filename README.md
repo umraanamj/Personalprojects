@@ -47,6 +47,10 @@ completion stats — all driven from a single command line at the bottom of the 
 - **Subtle sounds** — short system sounds on "win" moments (completing a task, finishing
   a Pomodoro, starting a focus timer). Cross-platform with no dependencies (macOS
   `afplay`, Windows `winsound`, Linux freedesktop sounds); toggle with `/sound`.
+- **Color themes** — switch the whole UI with `/theme <name>`. Ships a custom
+  Cyberpunk-2077 theme (default) plus every built-in Textual palette: `dracula`,
+  `gruvbox`, `nord`, `catppuccin-mocha`, `rose-pine`, `tokyo-night`, `monokai`,
+  `solarized-dark`, and more. Your choice is remembered.
 - **Completed view & auto-archive** — `/completed` shows finished tasks grouped by day;
   completed tasks are automatically archived out of the main view after 24 hours.
 - **Autocomplete** — type `/` for commands, `#` for existing tags, or `@` for due
@@ -98,6 +102,7 @@ All commands are typed into the input box. `<n>` refers to a task's number in th
 | `/clear all` | Delete all tasks and the archive |
 | `/export` | Write a readable report of completed tasks |
 | `/sound` | Toggle completion/timer sounds on or off (persists) |
+| `/theme [name]` | Switch color theme; no name lists them all (e.g. `/theme dracula`) |
 | `/help` | Show in-app help |
 
 ## Where your data lives
