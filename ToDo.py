@@ -136,11 +136,11 @@ class BootScreen(Screen):
     """A throwaway startup log that types itself out, then drops into the app."""
 
     LINES = [
-        "> INITIALIZING TASK MATRIX v2.4 ...",
+        "> JACKING IN ...",
+        "> NETRUNNER OS  v2.077",
         "> MOUNTING ~/TodoApp ........... OK",
-        "> LOADING RECORDS [{n}] ......... OK",
-        "> DECRYPTING BUFFER ............ OK",
-        "> SYSTEM ONLINE",
+        "> BREACHING ICE [{n}] .......... OK",
+        "> ACCESS GRANTED — WELCOME, CHOOM",
     ]
 
     def __init__(self, active):
@@ -185,8 +185,8 @@ class BootScreen(Screen):
 
 # ---------- APP ----------
 class TodoApp(App):
-    TITLE = "TODO//SYS"
-    SUB_TITLE = "task matrix online"
+    TITLE = "TODO//2077"
+    SUB_TITLE = "night city task grid"
 
     COMMANDS = [
         "/help", "/current", "/done", "/edit", "/due", "/delete", "/filter",
@@ -194,11 +194,12 @@ class TodoApp(App):
     ]
 
     CSS = """
-    /* ---- hacker terminal theme: phosphor green on black ---- */
-    Screen { layout: vertical; background: #04070a; color: #33ff66; }
+    /* ---- cyberpunk 2077 theme: neon yellow + cyan on black ---- */
+    Screen { layout: vertical; background: #0b0d0f; color: #e8fbff; }
 
-    Header { background: #02160d; color: #00ff9c; text-style: bold; }
-    Footer { background: #02160d; color: #1f9c5a; }
+    /* iconic yellow title bar; cyan footer */
+    Header { background: #f3e600; color: #0b0d0f; text-style: bold; }
+    Footer { background: #11171a; color: #00e5ff; }
 
     /* main panes take all the flexible space, pushing the rest to the bottom */
     #main { height: 1fr; }
@@ -207,41 +208,41 @@ class TodoApp(App):
        the wrapper can scroll when there are more tasks than fit on screen */
     #graph-scroll {
         width: 65%; height: 1fr;
-        border: round #00ff9c;
-        border-title-color: #00ff9c; border-title-align: left;
-        scrollbar-color: #00ff9c; scrollbar-background: #04070a;
+        border: round #f3e600;
+        border-title-color: #f3e600; border-title-align: left;
+        scrollbar-color: #f3e600; scrollbar-background: #0b0d0f;
     }
     #tasks-scroll {
         width: 35%; height: 1fr;
-        border: round #00d7ff;
-        border-title-color: #00d7ff; border-title-align: left;
-        scrollbar-color: #00d7ff; scrollbar-background: #04070a;
+        border: round #00e5ff;
+        border-title-color: #00e5ff; border-title-align: left;
+        scrollbar-color: #00e5ff; scrollbar-background: #0b0d0f;
     }
     #graph, #tasks { padding: 1; height: auto; }
 
     /* status bar: big pomodoro timer + loading bar + stats (not docked) */
     #status {
         height: 7;
-        border-top: heavy #00ff9c;
+        border-top: heavy #f3e600;
         padding: 0 1;
-        color: #00ff9c;
+        color: #e8fbff;
     }
 
     /* faded contextual hint line, sits just above the input */
-    #hint { height: 1; padding: 0 1; color: #1f9c5a; }
+    #hint { height: 1; padding: 0 1; color: #4f7a85; }
 
     /* input sits just above the footer in normal flow */
     #cmd {
         height: 3;
-        border: tall #00ff9c;
-        background: #02160d;
-        color: #aaffcc;
+        border: tall #f3e600;
+        background: #11171a;
+        color: #e8fbff;
     }
-    #cmd:focus { border: tall #39ff14; }
+    #cmd:focus { border: tall #00e5ff; }
 
     /* boot sequence overlay */
-    BootScreen { background: #04070a; }
-    #boot { padding: 2 4; color: #00ff9c; text-style: bold; }
+    BootScreen { background: #0b0d0f; }
+    #boot { padding: 2 4; color: #f3e600; text-style: bold; }
     """
 
     def __init__(self):
@@ -283,7 +284,7 @@ class TodoApp(App):
         yield self.hint_bar
 
         self.input_box = TabInput(
-            placeholder="root@todo:~$  enter task or /command …",
+            placeholder="user@2077:~$  enter task or /command …",
             suggester=InputSuggester(self),
             id="cmd"
         )
@@ -393,10 +394,10 @@ class TodoApp(App):
         if prog:
             remaining, total, frac = prog
             rem_frac = remaining / total if total else 0
-            color = "#00d36a" if rem_frac > 0.5 else ("#ffb300" if rem_frac > 0.2 else "#ff4040")
+            color = "#00e5ff" if rem_frac > 0.5 else ("#f3e600" if rem_frac > 0.2 else "#ff3b3b")
         else:
             frac = 0.0
-            color = "#00ff9c"
+            color = "#f3e600"
 
         # blink the colon once per heartbeat while a timer is running
         if prog and not self.blink:
@@ -418,16 +419,16 @@ class TodoApp(App):
         cells = []
         for i in range(bar_w):
             ch = "█" if i < filled else "░"
-            cells.append(f"[#ccffe9]{ch}[/]" if i == shimmer else ch)
+            cells.append(f"[#e8fbff]{ch}[/]" if i == shimmer else ch)
         bar = "".join(cells)
 
         # telemetry line: pulsing REC dot, uptime, live buffer count
-        rec = "[#ff4040]●[/]" if self.blink else "[#5a1414]●[/]"
+        rec = "[#ff3b3b]●[/]" if self.blink else "[#4a1414]●[/]"
         active = len([t for t in self.tasks if not t.completed])
         telem = (
-            f"{rec} [bold]REC[/]   "
-            f"[#1f9c5a]uptime {self._uptime_str()}[/]   "
-            f"[#1f9c5a]buffer: {active}[/]"
+            f"{rec} [bold #ff3b3b]REC[/]   "
+            f"[#2f8a99]uptime {self._uptime_str()}[/]   "
+            f"[#2f8a99]buffer: {active}[/]"
         )
 
         if prog:
@@ -518,7 +519,7 @@ class TodoApp(App):
     # ---------- COLOR ----------
     def get_color(self, path):
         if not path:
-            return "#33ff66"
+            return "#bfe9ff"
 
         # Stable vivid neon hue per top-level project: hash the name onto the
         # full color wheel, with high saturation/lightness so every project
@@ -593,7 +594,7 @@ class TodoApp(App):
     # ---------- GRAPH ----------
     def build_graph(self):
         if self.show_completed:
-            return "[#1f9c5a]// archive view — /back to return[/]"
+            return "[#4f7a85]// archive view — /back to return[/]"
 
         tree = {}
         for t in self.visible_tasks():
@@ -634,7 +635,7 @@ class TodoApp(App):
 
                     style = self.get_color(t.path)
                     if is_current:
-                        style = "bold green"
+                        style = "bold #f3e600"
                     elif self.current_task_id and not t.completed:
                         style = "dim"
 
@@ -679,7 +680,7 @@ class TodoApp(App):
             )
 
         if not lines:
-            return "[#1f9c5a]// no active tasks — awaiting input[/]"
+            return "[#4f7a85]// no active tasks — awaiting input[/]"
         return "\n".join(lines)
 
     # ---------- COMPLETED ----------
@@ -699,7 +700,7 @@ class TodoApp(App):
                 lines.append(f"  ✓ {t.text}")
             lines.append("")
 
-        return "\n".join(lines) if lines else "[#1f9c5a]// no completed tasks logged[/]"
+        return "\n".join(lines) if lines else "[#4f7a85]// no completed tasks logged[/]"
 
     # ---------- CLEANUP ----------
     def cleanup_completed_tasks(self):
@@ -812,15 +813,15 @@ class TodoApp(App):
             return ""
         delta = (t.due - datetime.now().date()).days
         if delta < 0:
-            color, label = "bold red", f"overdue {-delta}d"
+            color, label = "bold #ff3b3b", f"overdue {-delta}d"
         elif delta == 0:
-            color, label = "bold yellow", "today"
+            color, label = "bold #f3e600", "today"
         elif delta == 1:
-            color, label = "yellow", "tomorrow"
+            color, label = "#00e5ff", "tomorrow"
         elif delta <= 7:
-            color, label = "#ffaa00", t.due.strftime("%a")
+            color, label = "#00b8cc", t.due.strftime("%a")
         else:
-            color, label = "#888888", t.due.isoformat()
+            color, label = "#6b7a80", t.due.isoformat()
         return f" [{color}]⏳{label}[/]"
 
     # ---------- HINT LINE ----------
