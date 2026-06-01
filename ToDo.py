@@ -1,6 +1,6 @@
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Input, Static
-from textual.containers import Horizontal
+from textual.containers import Horizontal, VerticalScroll
 from textual.suggester import Suggester
 from datetime import datetime, timedelta, date
 import hashlib
@@ -14,6 +14,7 @@ DATA_FILE = os.path.join(DATA_DIR, "data.json")
 REPORT_FILE = os.path.join(DATA_DIR, "completed_report.txt")
 
 # How long a completed task stays in the main view before being archived.
+
 ARCHIVE_AFTER = timedelta(hours=24)
 
 # ---------- BIG TIMER FONT (3 rows tall, seven-segment) ----------
@@ -126,8 +127,12 @@ class TodoApp(App):
 
     /* main panes take all the flexible space, pushing the rest to the bottom */
     #main { height: 1fr; }
-    #graph { width: 65%; border: solid #666; padding: 1; }
-    #tasks { width: 35%; border: solid #666; padding: 1; }
+
+    /* scrollable wrappers hold the border/width; inner Static grows to fit so
+       the wrapper can scroll when there are more tasks than fit on screen */
+    #graph-scroll { width: 65%; border: solid #666; height: 1fr; }
+    #tasks-scroll { width: 35%; border: solid #666; height: 1fr; }
+    #graph, #tasks { padding: 1; height: auto; }
 
     /* status bar: big pomodoro timer + loading bar + stats (not docked) */
     #status {
@@ -151,16 +156,19 @@ class TodoApp(App):
         self.timer_total = None
         self.editing_task_id = None
         self.filter_tag = None
+        self.filter_due = None
 
     # ---------- UI ----------
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
 
         with Horizontal(id="main"):
-            self.graph_view = Static("", id="graph")
-            self.task_view = Static("", id="tasks")
-            yield self.graph_view
-            yield self.task_view
+            with VerticalScroll(id="graph-scroll"):
+                self.graph_view = Static("", id="graph")
+                yield self.graph_view
+            with VerticalScroll(id="tasks-scroll"):
+                self.task_view = Static("", id="tasks")
+                yield self.task_view
 
         self.status_bar = Static("", id="status")
         yield self.status_bar
@@ -344,10 +352,50 @@ class TodoApp(App):
         return tags
 
     def visible_tasks(self):
-        if not self.filter_tag:
-            return self.tasks
-        tag = f"#{self.filter_tag}".lower()
-        return [t for t in self.tasks if tag in t.text.lower()]
+        tasks = self.tasks
+        if self.filter_tag:
+            tag = f"#{self.filter_tag}".lower()
+            tasks = [t for t in tasks if tag in t.text.lower()]
+        if self.filter_due:
+            tasks = [t for t in tasks if self.match_due_filter(t)]
+        return tasks
+
+    def normalize_due_filter(self, spec):
+        # Returns a keyword string, a date, or None if unrecognized.
+        spec = spec.strip().lower().lstrip("@")
+        if spec in ("today", "tod"):
+            return "today"
+        if spec in ("tomorrow", "tmr", "tom"):
+            return "tomorrow"
+        if spec in ("week", "7d"):
+            return "week"
+        if spec == "overdue":
+            return "overdue"
+        return self.parse_due(spec)
+
+    def match_due_filter(self, t):
+        f = self.filter_due
+        today = datetime.now().date()
+        if f == "overdue":
+            return t.due is not None and t.due < today
+        if f == "today":
+            return t.due == today
+        if f == "tomorrow":
+            return t.due == today + timedelta(days=1)
+        if f == "week":
+            return t.due is not None and today <= t.due <= today + timedelta(days=7)
+        if isinstance(f, date):
+            return t.due == f
+        return True
+
+    def filter_label(self):
+        bits = []
+        if self.filter_tag:
+            bits.append(f"#{self.filter_tag}")
+        if self.filter_due:
+            due = self.filter_due if isinstance(self.filter_due, str) else self.filter_due.isoformat()
+            bits.append(f"due {due}")
+        return " · ".join(bits)
 
     # ---------- GLOBAL ORDER ----------
     def get_open_tasks_ordered(self):
@@ -373,8 +421,8 @@ class TodoApp(App):
         index_map = {id(t): i + 1 for i, t in enumerate(open_tasks)}
 
         lines = []
-        if self.filter_tag:
-            lines.append(f"[yellow]Filter: #{self.filter_tag} (/filter to clear)[/]")
+        if self.filter_tag or self.filter_due:
+            lines.append(f"[yellow]Filter: {self.filter_label()} (/filter to clear)[/]")
 
         def walk(node, prefix="", path=None):
             path = path or []
@@ -423,8 +471,8 @@ class TodoApp(App):
         open_tasks = self.get_open_tasks_ordered()
 
         lines = []
-        if self.filter_tag:
-            lines.append(f"[yellow]Filter: #{self.filter_tag}[/]")
+        if self.filter_tag or self.filter_due:
+            lines.append(f"[yellow]Filter: {self.filter_label()}[/]")
 
         for i, t in enumerate(open_tasks, start=1):
             is_current = t.id == self.current_task_id
@@ -540,23 +588,37 @@ class TodoApp(App):
                     continue
             kept.append(tok)
 
-        raw = " ".join(kept).rstrip("/")
-        text, path = raw, []
-        if "/" in raw:
-            parts = raw.rsplit(" ", 1)
-            if len(parts) == 2 and "/" in parts[1]:
-                text = parts[0]
-                path = [p.strip().title() for p in parts[1].split("/") if p.strip()]
+        text, path = "", []
+        # Leading path (how /edit lays tasks out): first token is a folder path
+        # when it contains "/" and there's still text after it.
+        if len(kept) >= 2 and "/" in kept[0]:
+            path = [p.strip().title() for p in kept[0].split("/") if p.strip()]
+            text = " ".join(kept[1:])
+        else:
+            raw = " ".join(kept).rstrip("/")
+            text = raw
+            if "/" in raw:
+                parts = raw.rsplit(" ", 1)
+                if len(parts) == 2 and "/" in parts[1]:
+                    text = parts[0]
+                    path = [p.strip().title() for p in parts[1].split("/") if p.strip()]
 
         return text, path, due
 
     def task_to_input(self, t):
-        s = t.text
+        # Path first, then due, so the editable task text sits at the end under
+        # the cursor — no hunting for an edit spot in the middle of the line.
+        parts = []
         if t.path:
-            s += " " + "/".join(t.path)
+            # keep a "/" even for a single folder so it round-trips as a path
+            path_str = "/".join(t.path)
+            if len(t.path) == 1:
+                path_str += "/"
+            parts.append(path_str)
         if t.due:
-            s += " @" + t.due.isoformat()
-        return s
+            parts.append("@" + t.due.isoformat())
+        parts.append(t.text)
+        return " ".join(parts)
 
     def due_str(self, t):
         # Small colored badge shown after a task; "" when no due date.
@@ -652,6 +714,7 @@ class TodoApp(App):
                 task = self.get_open_tasks_ordered()[idx - 1]
                 self.editing_task_id = task.id
                 self.input_box.value = self.task_to_input(task)
+                self.input_box.cursor_position = len(self.input_box.value)
                 self.input_box.focus()
                 self.notify(f"Editing ({idx}) — change the text and press Enter")
             except (ValueError, IndexError):
@@ -691,11 +754,24 @@ class TodoApp(App):
                     self.notify("Due date cleared")
 
         elif parts[0] == "/filter":
-            if len(parts) > 1:
+            if len(parts) >= 2 and parts[1].lower() == "due":
+                if len(parts) >= 3:
+                    self.filter_due = self.normalize_due_filter(parts[2])
+                    if self.filter_due is None:
+                        self.notify("Due filter: today | tomorrow | week | overdue | YYYY-MM-DD")
+                    else:
+                        self.filter_tag = None
+                        self.notify(f"Filtering by due: {self.filter_label()}")
+                else:
+                    self.filter_due = None
+                    self.notify("Due filter cleared")
+            elif len(parts) > 1:
                 self.filter_tag = parts[1].lstrip("#")
+                self.filter_due = None
                 self.notify(f"Filtering by #{self.filter_tag}")
             else:
                 self.filter_tag = None
+                self.filter_due = None
                 self.notify("Filter cleared")
 
         elif cmd == "/completed":
@@ -712,6 +788,7 @@ class TodoApp(App):
             self.timer_total = None
             self.editing_task_id = None
             self.filter_tag = None
+            self.filter_due = None
 
         elif cmd == "/export":
             self.export_readable_report()
@@ -729,6 +806,7 @@ class TodoApp(App):
                 "/due <n> [date]         set/clear due date (blank = clear)\n"
                 "/delete <n>             delete task n\n"
                 "/filter <tag>           show only tasks with #tag (blank = clear)\n"
+                "/filter due <when>      by due date: today|tomorrow|week|overdue|YYYY-MM-DD\n"
                 "/completed              view completed tasks\n"
                 "/back                   leave the completed view\n"
                 "/clear all              delete all tasks and archive\n"
