@@ -722,7 +722,8 @@ class TodoApp(App):
     # ---------- GRAPH ----------
     def build_graph(self):
         if self.show_completed:
-            return f"[{self._muted()}]// archive view — /back to return[/]"
+            # show the completed log in the big left pane so it's prominent
+            return self.build_completed_view()
 
         p = self._palette()
 
@@ -783,7 +784,12 @@ class TodoApp(App):
     # ---------- TASK VIEW ----------
     def build_task_view(self):
         if self.show_completed:
-            return self.build_completed_view()
+            p = self._palette()
+            return (
+                f"[{p.warning}]✓ COMPLETED LOG[/]  [{self._muted()}](shown left ←)[/]\n\n"
+                f"[{p.secondary}]{self.get_stats()}[/]\n\n"
+                f"[{self._muted()}]/back to return[/]"
+            )
 
         open_tasks = self.get_open_tasks_ordered()
         p = self._palette()
@@ -832,7 +838,9 @@ class TodoApp(App):
                 lines.append(f"  ✓ {t.text}")
             lines.append("")
 
-        return "\n".join(lines) if lines else f"[{self._muted()}]// no completed tasks logged[/]"
+        return "\n".join(lines) if lines else (
+            f"[{self._muted()}]// no completed tasks yet — finish one with /done <n>[/]"
+        )
 
     # ---------- CLEANUP ----------
     def cleanup_completed_tasks(self):
