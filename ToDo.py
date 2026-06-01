@@ -9,6 +9,7 @@ import json
 import os
 import re
 import random
+import colorsys
 
 # glyphs used for the "decrypt" scramble effect and title glitch
 SCRAMBLE_GLYPHS = "!@#$%&*+=/\\<>?▓▒░01x"
@@ -190,12 +191,6 @@ class TodoApp(App):
     COMMANDS = [
         "/help", "/current", "/done", "/edit", "/due", "/delete", "/filter",
         "/completed", "/back", "/clear all", "/export",
-    ]
-
-    # neon terminal palette for project folders / tasks (green–cyan family)
-    PALETTE = [
-        "#00ff9c", "#00d7ff", "#39ff14", "#2ee6d6", "#7cfc00",
-        "#16f0a0", "#5ef38c", "#0fffc1", "#9dff00", "#00e5ff",
     ]
 
     CSS = """
@@ -525,9 +520,13 @@ class TodoApp(App):
         if not path:
             return "#33ff66"
 
-        # hash the top-level project name onto the neon terminal palette
-        base = int(hashlib.md5(path[0].encode()).hexdigest(), 16)
-        return self.PALETTE[base % len(self.PALETTE)]
+        # Stable vivid neon hue per top-level project: hash the name onto the
+        # full color wheel, with high saturation/lightness so every project
+        # gets its own distinct color while staying in the cyberpunk-neon family.
+        h = int(hashlib.md5(path[0].encode()).hexdigest(), 16)
+        hue = (h % 360) / 360.0
+        r, g, b = colorsys.hls_to_rgb(hue, 0.62, 0.95)
+        return f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
 
     # ---------- TAGS / FILTER ----------
     def all_tags(self):
