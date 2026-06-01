@@ -49,32 +49,22 @@ CP2077_THEME = Theme(
     error="#ff3b3b",
     dark=True,
 )
-DEDSEC_THEME = Theme(
-    name="dedsec",
-    primary="#00e08a",     # spray green
-    secondary="#8a8f98",   # concrete grey
-    accent="#ff2e7e",      # spray magenta
-    foreground="#e8ffe8",
-    background="#0a0a0a",
-    surface="#121212",
-    panel="#161616",
-    success="#00e08a",
-    warning="#ff9e3d",
+# Watch Dogs ctOS terminal palette — cyan + amber on near-black.
+CTOS_THEME = Theme(
+    name="ctos",
+    primary="#36e0e0",     # ctOS cyan
+    secondary="#5a7a85",   # muted steel
+    accent="#ff7a1a",      # ctOS amber
+    foreground="#dff6f6",
+    background="#0a0e10",
+    surface="#10171a",
+    panel="#10171a",
+    success="#36e0e0",
+    warning="#ff7a1a",
     error="#ff3b3b",
     dark=True,
 )
 DEFAULT_THEME = "cp2077"
-
-# DedSec (Watch Dogs 2) flair — shown once on the boot screen, then gone.
-DEDSEC_SKULL = r"""
-   .-=======-.
-  /  _     _  \
- |  (_)   (_)  |
- |      ^      |
-  \   '---'   /
-   `|| | | ||`
-     DEDSEC
-"""
 
 # ---------- STORAGE ----------
 DATA_DIR = os.path.join(os.path.expanduser("~"), "TodoApp")
@@ -220,10 +210,10 @@ class BootScreen(Screen):
     """A throwaway startup log that types itself out, then drops into the app."""
 
     LINES = [
-        "> CONNECTING TO ctOS ...",
-        "> SPOOFING CREDENTIALS ........ OK",
-        "> BREACHING NODE [{n}] ........ OK",
-        "> WE ARE DEDSEC.",
+        "> ctOS TERMINAL  v3.1",
+        "> ESTABLISHING UPLINK ......... OK",
+        "> AUTHENTICATING .............. OK",
+        "> SYNCING NODES [{n}] ......... OK",
         "> ACCESS GRANTED",
     ]
 
@@ -235,7 +225,6 @@ class BootScreen(Screen):
         self._done = False
 
     def compose(self) -> ComposeResult:
-        yield Static(DEDSEC_SKULL, id="boot-skull")
         self.log_view = Static("", id="boot")
         yield self.log_view
 
@@ -266,6 +255,21 @@ class BootScreen(Screen):
             self.app.query_one("#cmd").focus()
         except Exception:
             pass
+
+
+# ---------- PURGE SPLASH ----------
+class PurgeScreen(Screen):
+    """Brief on-theme flash shown while /clear all wipes everything."""
+
+    def compose(self) -> ComposeResult:
+        yield Static("⚠  PURGING DATABASE …\n\n   flushing all records", id="purge")
+
+    def on_mount(self):
+        self.set_timer(0.7, self._finish)
+
+    def _finish(self):
+        self.app._do_clear_all()
+        self.app.pop_screen()
 
 
 # ---------- NOTES ----------
@@ -300,7 +304,7 @@ class NotesScreen(Screen):
 
     def action_save(self):
         self._persist()
-        self.app.notify(f"Note saved · {self.path}")
+        self.app.notify(f"▸ NOTE SAVED · {self.path}")
 
     def action_close(self):
         self._persist()
@@ -436,8 +440,11 @@ class TodoApp(App):
 
     /* boot sequence overlay */
     BootScreen { background: $background; }
-    #boot-skull { padding: 1 4 0 4; color: $accent; text-style: bold; }
-    #boot { padding: 0 4 2 4; color: $primary; text-style: bold; }
+    #boot { padding: 2 4; color: $primary; text-style: bold; }
+
+    /* purge confirmation splash for /clear all */
+    PurgeScreen { align: center middle; background: $background; }
+    #purge { width: auto; padding: 2 4; border: heavy $error; color: $error; text-style: bold; }
 
     /* notes editor + browser pages */
     NotesScreen, NotesBrowserScreen { background: $background; }
@@ -478,6 +485,8 @@ class TodoApp(App):
         self._title_base = self.TITLE
         self._reveal = None
         self._reveal_timer = None
+        self._redact = None          # glitch flash on task completion
+        self._redact_timer = None
         # selected color theme (applied in on_mount once the app is running)
         self._theme_name = DEFAULT_THEME
         # sound: little dopamine hits on "win" events (cross-platform, no deps)
@@ -516,7 +525,7 @@ class TodoApp(App):
 
     def on_mount(self):
         self.register_theme(CP2077_THEME)
-        self.register_theme(DEDSEC_THEME)
+        self.register_theme(CTOS_THEME)
         self.query_one("#graph-scroll").border_title = "[ PROJECTS ]"
         self.query_one("#tasks-scroll").border_title = "[ TASKS ]"
         self.load_data()
@@ -587,8 +596,31 @@ class TodoApp(App):
                 self._reveal_timer = None
         self.refresh_all()
 
+    def _start_redact(self, task):
+        # brief glitch flash when a task is completed (one-shot, then stops)
+        self._redact = {"id": task.id, "frames": 8}
+        if self._redact_timer:
+            self._redact_timer.stop()
+        self._redact_timer = self.set_interval(0.04, self._redact_tick)
+
+    def _redact_tick(self):
+        if not self._redact:
+            return
+        self._redact["frames"] -= 1
+        if self._redact["frames"] <= 0:
+            self._redact = None
+            if self._redact_timer:
+                self._redact_timer.stop()
+                self._redact_timer = None
+        self.refresh_all()
+
     def _display_text(self, t):
-        # real text, unless this task is mid-"decrypt" — then scramble the tail
+        # mid-completion: flash scrambled glyphs (redaction), then settle
+        rd = self._redact
+        if rd and rd["id"] == t.id:
+            return "".join(random.choice(SCRAMBLE_GLYPHS) if c != " " else " "
+                           for c in t.text)
+        # mid-add: "decrypt" reveal — scramble the not-yet-typed tail
         r = self._reveal
         if not r or r["id"] != t.id:
             return t.text
@@ -669,7 +701,7 @@ class TodoApp(App):
             self.timer_end = None
             self.timer_total = None
             self.current_task_id = None
-            self.notify("⏱ Timer complete")
+            self.notify("▓ OP COMPLETE")
             self._play("win")
         self.refresh_all()
 
@@ -1388,6 +1420,7 @@ class TodoApp(App):
         self.tasks.append(task)
         self.task_id += 1
         self._start_reveal(task)        # decrypt-style reveal of the new text
+        self.notify("+ NODE ADDED", timeout=2)
 
     def apply_edit(self, raw):
         task = next((t for t in self.tasks if t.id == self.editing_task_id), None)
@@ -1397,13 +1430,13 @@ class TodoApp(App):
 
         text, path, due = self.parse_task_input(raw)
         if not text:
-            self.notify("Edit cancelled (empty text)")
+            self.notify("! EDIT ABORTED (empty)")
             return
 
         task.text = text
         task.path = path
         task.due = due
-        self.notify("Task updated")
+        self.notify("▸ RECORD UPDATED")
 
     # ---------- COMMANDS ----------
     def handle_command(self, cmd):
@@ -1420,8 +1453,9 @@ class TodoApp(App):
                     self.timer_end = datetime.now() + timedelta(minutes=mins)
                     self.timer_total = mins * 60
                     self._play("start")
+                    self.notify(f"▸ UPLINK ENGAGED · {mins}m")
             except (ValueError, IndexError):
-                self.notify("Usage: /current <n> [minutes]")
+                self.notify("! USAGE: /current <n> [minutes]")
 
         elif parts[0] == "/done" and len(parts) > 1:
             try:
@@ -1430,20 +1464,22 @@ class TodoApp(App):
                 task.completed = True
                 task.completed_at = datetime.now()
                 self._play("complete")
+                self._start_redact(task)
+                self.notify(f"▓ TARGET CLEARED · {task.text}")
 
                 if task.id == self.current_task_id:
                     self.current_task_id = None
                     self.timer_end = None
                     self.timer_total = None
             except (ValueError, IndexError):
-                self.notify("Invalid number")
+                self.notify("! INVALID NODE")
 
         elif parts[0] == "/edit" and len(parts) > 1:
             try:
                 idx = int(parts[1])
                 task = self.get_open_tasks_ordered()[idx - 1]
             except (ValueError, IndexError):
-                self.notify("Usage: /edit <n>   or   /edit <n> @<due>")
+                self.notify("! USAGE: /edit <n>   or   /edit <n> due <date>")
             else:
                 if len(parts) > 2:
                     # quick due-date edit — change only the date, leave text alone.
@@ -1453,16 +1489,16 @@ class TodoApp(App):
                         date_parts = date_parts[1:]
                     d = self.parse_due(" ".join(date_parts)) if date_parts else None
                     if d is None:
-                        self.notify("Bad date. Try /edit n due tomorrow, due fri, due 2026-06-15")
+                        self.notify("! BAD DATE — try: due tomorrow · due fri · 2026-06-15")
                     else:
                         task.due = d
-                        self.notify(f"Due {d.isoformat()}: {task.text}")
+                        self.notify(f"▸ DUE SET · {d.isoformat()}")
                 else:
                     self.editing_task_id = task.id
                     self.input_box.value = self.task_to_input(task)
                     self.input_box.cursor_position = len(self.input_box.value)
                     self.input_box.focus()
-                    self.notify(f"Editing ({idx}) — change the text and press Enter")
+                    self.notify(f"▸ EDITING NODE {idx} — edit & Enter")
 
         elif parts[0] == "/delete" and len(parts) > 1:
             try:
@@ -1475,27 +1511,27 @@ class TodoApp(App):
                     self.timer_total = None
                 if task.id == self.editing_task_id:
                     self.editing_task_id = None
-                self.notify(f"Deleted: {task.text}")
+                self.notify(f"✗ PURGED · {task.text}")
             except (ValueError, IndexError):
-                self.notify("Usage: /delete <n>")
+                self.notify("! USAGE: /delete <n>")
 
         elif parts[0] == "/due" and len(parts) > 1:
             try:
                 idx = int(parts[1])
                 task = self.get_open_tasks_ordered()[idx - 1]
             except (ValueError, IndexError):
-                self.notify("Usage: /due <n> <date>  (no date = clear)")
+                self.notify("! USAGE: /due <n> <date>   (no date = clear)")
             else:
                 if len(parts) > 2:
                     d = self.parse_due(parts[2])
                     if d is None:
-                        self.notify("Bad date. Try /due n 2026-06-15, @fri, @3d")
+                        self.notify("! BAD DATE — try: 2026-06-15 · @fri · @3d")
                     else:
                         task.due = d
-                        self.notify(f"Due {d.isoformat()}: {task.text}")
+                        self.notify(f"▸ DUE SET · {d.isoformat()}")
                 else:
                     task.due = None
-                    self.notify("Due date cleared")
+                    self.notify("▸ DUE CLEARED")
 
         elif parts[0] == "/filter":
             if len(parts) >= 2 and parts[1].lower() == "due":
@@ -1505,18 +1541,18 @@ class TodoApp(App):
                         self.notify("Due filter: today | tomorrow | week | overdue | YYYY-MM-DD")
                     else:
                         self.filter_tag = None
-                        self.notify(f"Filtering by due: {self.filter_label()}")
+                        self.notify(f"▸ FILTER · {self.filter_label()}")
                 else:
                     self.filter_due = None
-                    self.notify("Due filter cleared")
+                    self.notify("▸ FILTER CLEARED")
             elif len(parts) > 1:
                 self.filter_tag = parts[1].lstrip("#")
                 self.filter_due = None
-                self.notify(f"Filtering by #{self.filter_tag}")
+                self.notify(f"▸ FILTER · #{self.filter_tag}")
             else:
                 self.filter_tag = None
                 self.filter_due = None
-                self.notify("Filter cleared")
+                self.notify("▸ FILTER CLEARED")
 
         elif cmd == "/stats":
             self.push_screen(StatsScreen())
@@ -1528,22 +1564,15 @@ class TodoApp(App):
             self.show_completed = False
 
         elif cmd == "/clear all":
-            self.tasks.clear()
-            self.archived_tasks.clear()
-            self.current_task_id = None
-            self.timer_end = None
-            self.timer_total = None
-            self.editing_task_id = None
-            self.filter_tag = None
-            self.filter_due = None
+            self.push_screen(PurgeScreen())  # splash, then _do_clear_all()
 
         elif cmd == "/export":
             self.export_readable_report()
-            self.notify("Report exported")
+            self.notify("▸ REPORT EXPORTED")
 
         elif cmd == "/sound":
             self.sound_on = not self.sound_on
-            self.notify(f"Sound {'ON' if self.sound_on else 'OFF'}")
+            self.notify(f"▸ AUDIO {'ON' if self.sound_on else 'OFF'}")
             self._play("toggle")
 
         elif parts[0] in ("/notes", "/note"):
@@ -1552,7 +1581,7 @@ class TodoApp(App):
                 if path:
                     self.push_screen(NotesScreen(path))
                 else:
-                    self.notify("Usage: /notes <folder/path>   (or /notes to browse)")
+                    self.notify("! USAGE: /notes <folder/path>   (or /notes to browse)")
             else:
                 self.push_screen(NotesBrowserScreen())
 
@@ -1562,9 +1591,9 @@ class TodoApp(App):
                 if name in self.available_themes:
                     self.theme = name
                     self._theme_name = name
-                    self.notify(f"Theme: {name}")
+                    self.notify(f"▸ THEME · {name}")
                 else:
-                    self.notify(f"Unknown theme '{name}'. Type /theme to list them.")
+                    self.notify(f"! UNKNOWN THEME '{name}' — type /theme to list")
             else:
                 names = "  ".join(sorted(self.available_themes))
                 self.notify(f"Current: {self.theme}\nThemes: {names}\nUse /theme <name>", timeout=15)
@@ -1596,6 +1625,19 @@ class TodoApp(App):
             )
 
     # ---------- REFRESH ----------
+    def _do_clear_all(self):
+        # actual wipe, run by PurgeScreen after the splash
+        self.tasks.clear()
+        self.archived_tasks.clear()
+        self.current_task_id = None
+        self.timer_end = None
+        self.timer_total = None
+        self.editing_task_id = None
+        self.filter_tag = None
+        self.filter_due = None
+        self.save_data()
+        self.refresh_all()
+
     def refresh_all(self):
         self.graph_view.update(self.build_graph())
         self.task_view.update(self.build_task_view())

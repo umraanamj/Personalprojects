@@ -57,8 +57,8 @@ completion stats — all driven from a single command line at the bottom of the 
   searchable browser of all your notes. A folder can hold a note with no tasks (it
   won't clutter the task views), and task-folders that have a note show a 📝 marker.
 - **Color themes** — switch the whole UI with `/theme <name>`. Ships a custom
-  Cyberpunk-2077 theme (default) and a DedSec theme (`/theme dedsec`), plus every
-  built-in Textual palette: `dracula`,
+  Cyberpunk-2077 theme (default) and a Watch Dogs ctOS theme (`/theme ctos`), plus
+  every built-in Textual palette: `dracula`,
   `gruvbox`, `nord`, `catppuccin-mocha`, `rose-pine`, `tokyo-night`, `monokai`,
   `solarized-dark`, and more. Your choice is remembered.
 - **Completed view & auto-archive** — `/completed` shows finished tasks grouped by day;
