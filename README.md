@@ -50,6 +50,9 @@ completion stats — all driven from a single command line at the bottom of the 
   `kt`, `prod`, `run`, `plan`, `build` (or `1`–`7`). `/schedule` opens a **timesheet**:
   pick day/week (←/→ to move, `d`/`w` to switch) and toggle (`t`) between a by-category
   and a by-task breakdown, each with hours and bars.
+  Tasks can carry a **default category** so timing them is one keystroke: assign with
+  `/cat <n> <category>` or by adding a `+build` token to the task text, then `/current <n>`
+  auto-tags the time. Tagged tasks show a small `•build` badge.
 - **Completion stats** — the status bar tracks tasks completed today, this week, this
   month, this year, and in total. `/stats` opens a full **productivity dashboard**:
   most-productive day this week/month/year, best day ever, top month, busiest weekday,
@@ -108,7 +111,8 @@ All commands are typed into the input box. `<n>` refers to a task's number in th
 
 | Command | What it does |
 | --- | --- |
-| `/current <n> [min] [cat]` | Stopwatch (no min) or pomodoro (min) on a task, optionally tagged to a category |
+| `/cat <n> <category>` | Assign a default category to a task (blank clears it); or add `+build` in the task text |
+| `/current <n> [min] [cat]` | Stopwatch (no min) or pomodoro (min) on a task; uses the task's category if none given |
 | `/track <cat>` | Start a live stopwatch for a category (no task) |
 | `/track <cat> <min>` | Log `<min>` minutes to a category directly, rounded to 30 (e.g. `/track 1 60`) |
 | `/categories` | List all timesheet categories and their shortcuts |

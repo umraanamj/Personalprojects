@@ -118,7 +118,7 @@ BIG = {
 
 # ---------- TASK ----------
 class Task:
-    def __init__(self, id, text, path=None, due=None, created_at=None):
+    def __init__(self, id, text, path=None, due=None, created_at=None, category=None):
         self.id = id
         self.text = text
         self.path = path or []
@@ -126,6 +126,7 @@ class Task:
         self.completed = False
         self.completed_at = None
         self.created_at = created_at  # when the task was added (for time-to-complete)
+        self.category = category      # timesheet category code, or None
 
     def to_dict(self):
         return {
@@ -136,6 +137,7 @@ class Task:
             "completed": self.completed,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "category": self.category,
         }
 
     @staticmethod
@@ -148,6 +150,7 @@ class Task:
             t.completed_at = datetime.fromisoformat(data["completed_at"])
         if data.get("created_at"):
             t.created_at = datetime.fromisoformat(data["created_at"])
+        t.category = data.get("category")
         return t
 
 
@@ -187,6 +190,14 @@ class InputSuggester(Suggester):
                         "fri", "sat", "sun"):
                 if opt.startswith(word) and opt != word:
                     return prefix + "@" + opt
+
+        # +category completion (e.g. +bu -> +build)
+        if last.startswith("+") and not value.startswith("/"):
+            word = last[1:].lower()
+            prefix = value[:cut + 1]
+            for code, _label, _aliases in CATEGORIES:
+                if code.startswith(word) and code != word:
+                    return prefix + "+" + code
 
         # folder completion: as you type a project path, suggest a matching
         # existing folder — one segment at a time. (Not in command lines.)
@@ -465,7 +476,7 @@ class TodoApp(App):
     COMMANDS = [
         "/help", "/current", "/done", "/edit", "/due", "/delete", "/filter",
         "/completed", "/back", "/clear all", "/export", "/sound", "/theme",
-        "/notes", "/stats", "/track", "/stop", "/schedule", "/categories",
+        "/notes", "/stats", "/track", "/stop", "/schedule", "/categories", "/cat",
     ]
 
     # All colors come from the active theme's variables, so /theme reskins the
@@ -1411,7 +1422,7 @@ class TodoApp(App):
                         f"{prefix}{connector}[{style}]"
                         f"{prefix_mark}({display_id}) "
                         f"{'✓ ' if t.completed else ''}{self._display_text(t)}[/]"
-                        + self.due_str(t)
+                        + self.due_str(t) + self.cat_str(t)
                     )
 
         walk(tree)
@@ -1449,7 +1460,7 @@ class TodoApp(App):
             lines.append(
                 f"[{style}]{prefix}({i}) {self._display_text(t)}[/] "
                 f"[{base_color}][{path}][/]"
-                + self.due_str(t)
+                + self.due_str(t) + self.cat_str(t)
             )
 
         if not lines:
@@ -1540,9 +1551,10 @@ class TodoApp(App):
         return None
 
     def parse_task_input(self, raw):
-        # Pull out the due date — either "@<date>" anywhere, or the words
-        # "due <date>" (e.g. "due today") — then parse the rest into text + path.
+        # Pull out the due date ("@<date>" or "due <date>") and a "+<category>"
+        # token (e.g. +build), then parse the rest into text + path.
         due = None
+        category = None
         kept = []
         toks = raw.strip().split()
         i = 0
@@ -1560,6 +1572,12 @@ class TodoApp(App):
                     due = parsed
                     i += 2
                     continue
+            if category is None and tok.startswith("+") and len(tok) > 1:
+                c = resolve_category(tok[1:])
+                if c:
+                    category = c
+                    i += 1
+                    continue
             kept.append(tok)
             i += 1
 
@@ -1573,7 +1591,7 @@ class TodoApp(App):
             path = [s.strip().title() for s in kept[-1].split("/") if s.strip()]
             text = " ".join(kept[:-1])
 
-        return text, path, due
+        return text, path, due, category
 
     def task_to_input(self, t):
         # Path first, then due, so the editable task text sits at the end under
@@ -1587,8 +1605,16 @@ class TodoApp(App):
             parts.append(path_str)
         if t.due:
             parts.append("@" + t.due.isoformat())
+        if t.category:
+            parts.append("+" + t.category)
         parts.append(t.text)
         return " ".join(parts)
+
+    def cat_str(self, t):
+        # small colored category badge (uses the short code, e.g. •build)
+        if not t.category:
+            return ""
+        return f" [{self.get_color([t.category])}]•{t.category}[/]"
 
     def due_str(self, t):
         # Small colored badge shown after a task; "" when no due date.
@@ -1650,10 +1676,11 @@ class TodoApp(App):
 
     # ---------- ADD / EDIT TASK ----------
     def add_task(self, raw):
-        text, path, due = self.parse_task_input(raw)
+        text, path, due, category = self.parse_task_input(raw)
         if not text:
             return
-        task = Task(self.task_id, text, path, due, created_at=datetime.now())
+        task = Task(self.task_id, text, path, due,
+                    created_at=datetime.now(), category=category)
         self.tasks.append(task)
         self.task_id += 1
         self._start_reveal(task)        # decrypt-style reveal of the new text
@@ -1665,11 +1692,12 @@ class TodoApp(App):
         if task is None:
             return
 
-        text, path, due = self.parse_task_input(raw)
+        text, path, due, category = self.parse_task_input(raw)
         if not text:
             self.notify("! EDIT ABORTED (empty)")
             return
 
+        task.category = category
         task.text = text
         task.path = path
         task.due = due
@@ -1694,6 +1722,8 @@ class TodoApp(App):
                         c = resolve_category(tok)
                         if c:
                             cat = c
+                if cat is None:
+                    cat = task.category  # fall back to the task's assigned category
                 tag = f" · {CATEGORY_LABEL[cat]}" if cat else ""
                 if mins:
                     self._start_countdown(mins, cat, task.id, task.text)
@@ -1727,6 +1757,24 @@ class TodoApp(App):
 
         elif cmd in ("/categories", "/cats"):
             self.notify(self.category_legend(), timeout=22)
+
+        elif parts[0] == "/cat":
+            try:
+                idx = int(parts[1])
+                task = self.get_open_tasks_ordered()[idx - 1]
+            except (ValueError, IndexError):
+                self.notify("! USAGE: /cat <n> <category>   (blank = clear)")
+            else:
+                if len(parts) > 2:
+                    c = resolve_category(parts[2])
+                    if not c:
+                        self.notify("! UNKNOWN CATEGORY — /categories to list")
+                    else:
+                        task.category = c
+                        self.notify(f"▸ CATEGORY · {task.text} → {CATEGORY_LABEL[c]}")
+                else:
+                    task.category = None
+                    self.notify("▸ CATEGORY CLEARED")
 
         elif parts[0] == "/done" and len(parts) > 1:
             try:
@@ -1875,7 +1923,9 @@ class TodoApp(App):
                 "          e.g.  pay rent #bills Money/Home due today\n"
                 "  due forms: @today / due today · @fri / due fri · @3d · 2026-06-01\n"
                 "\n"
-                "/current <n>            track time on task n (count-up stopwatch)\n"
+                "/cat <n> <category>     assign a category to task n (blank = clear)\n"
+                "                          (or add '+build' when typing the task)\n"
+                "/current <n>            track time on task n (uses its category)\n"
                 "/current <n> <min>      pomodoro countdown on task n\n"
                 "/current <n> [min] <cat>  ...also tag the time to a category\n"
                 "/track <cat>            start a live stopwatch for a category (no task)\n"
