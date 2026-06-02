@@ -1636,24 +1636,41 @@ class TodoApp(App):
 
     # ---------- HINT LINE ----------
     def hint_for(self, value):
-        # Faded line above the input; shows due-date options while entering one.
+        # Faded line above the input; contextual help while typing.
         low = value.lower()
         last = value.split(" ")[-1] if value else ""
         dates = "today · tomorrow · mon–sun · 3d · 2026-06-15"
+        cats = "admin · dev · kt · prod · run · plan · build  (or 1–7)"
 
+        # ---- command contexts ----
         if low.startswith("/track"):
-            return "[dim]categories: admin · dev · kt · prod · run · plan · build  (or 1–7) · /categories[/]"
+            return f"[dim]categories: {cats} · /categories[/]"
         if re.match(r"/current\s+\d+\s", low):
-            return "[dim]optional: <min> and/or category — admin · dev · kt · prod · run · plan · build[/]"
+            return f"[dim]optional: <min> and/or category — {cats}[/]"
         if low.startswith("/filter due"):
             return "[dim]filter by due: today · tomorrow · week · overdue · 2026-06-15[/]"
         if re.match(r"/edit\s+\d+\s", low) is not None:
             return f"[dim]set due date:  due tomorrow · due fri · due 2026-06-15   (dates: {dates})[/]"
-        if low.startswith("/due ") or last.startswith("@"):
+        if low.startswith("/due "):
             return f"[dim]due options: {dates}[/]"
-        if not value:
-            return "[dim]task text · project as Work/Sub · due as @tomorrow · /help for commands[/]"
-        return ""
+        if low.startswith("/"):
+            return ""  # other commands: the / autocomplete handles it
+
+        # ---- writing a task: switch hint to the token being typed ----
+        toks = value.split(" ")
+        prev = toks[-2].lower() if len(toks) >= 2 else ""
+        if last.startswith("@") or prev == "due":
+            return f"[dim]due: {dates}[/]"
+        if last.startswith("+"):
+            return f"[dim]category: {cats}[/]"
+        if last.startswith("#"):
+            tags = "  ".join(sorted(self.all_tags())[:6])
+            return f"[dim]tag: {tags}[/]" if tags else "[dim]tag: #yourlabel[/]"
+        if "/" in last and len(last) > 1:
+            return "[dim]project: Work/Sub  ·  Tab completes an existing folder[/]"
+        # default composition guide (also shown when the box is empty)
+        return ("[dim]project Work/Sub  ·  +category  ·  #tag  ·  due @tomorrow"
+                "  ·  /help for commands[/]")
 
     def on_input_changed(self, event: Input.Changed):
         self.hint_bar.update(self.hint_for(event.value))
