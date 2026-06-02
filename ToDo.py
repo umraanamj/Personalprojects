@@ -89,6 +89,78 @@ for _code, _label, _aliases in CATEGORIES:
 def resolve_category(token):
     return CATEGORY_ALIASES.get(token.strip().lower())
 
+# ---------- HELP CONTENT ----------
+HELP_SECTIONS = [
+    ("tasks", "TASKS", [
+        "Add a task — just type it, with optional parts in any order:",
+        "  Project/Sub   folder path (or 'Folder/' for a single level)",
+        "  #tag          a label (any number of them)",
+        "  +category     timesheet category (admin/dev/kt/prod/run/plan/build)",
+        "  @today        a due date (also: due today, @fri, due fri, @3d, 2026-06-15)",
+        "  e.g.  pay rent #bills Money/Home +admin due fri",
+        "",
+        "/done <n>             complete task n",
+        "/edit <n>             load task n into the input to edit",
+        "/edit <n> due <date>  quickly change only the due date",
+        "/due <n> [date]       set or clear the due date (blank clears)",
+        "/cat <n> <category>   assign a category (blank clears)",
+        "/delete <n>           delete task n",
+    ]),
+    ("time", "TIME TRACKING", [
+        "/current <n>              stopwatch on task n (uses the task's category)",
+        "/current <n> <min>        pomodoro countdown on task n",
+        "/current <n> [min] <cat>  ...also tag the time to a category",
+        "/track <cat>              live stopwatch for a category (no task)",
+        "/track <cat> <min>        log <min> to a category now (e.g. /track 1 60)",
+        "/stop                     stop the active timer and log it",
+        "/categories               list categories and their shortcuts",
+        "",
+        "All logged time rounds UP to the nearest 30 minutes.",
+        "Categories: admin·1  dev·2  kt·3  prod·4  run·5  plan·6  build·7",
+    ]),
+    ("schedule", "SCHEDULE / TIMESHEET", [
+        "/schedule    open the timesheet, then:",
+        "  ← / →      previous / next period",
+        "  d / w      day or week view",
+        "  t          toggle category vs task breakdown",
+        "  Esc        close",
+    ]),
+    ("stats", "STATS", [
+        "/stats   productivity dashboard — completed counts, most-productive",
+        "         day/week/month/year, streaks, top projects, open-task split",
+    ]),
+    ("notes", "NOTES", [
+        "/notes <folder/path>   open or edit that folder's note",
+        "/notes                 search all your notes",
+    ]),
+    ("filter", "VIEW & FILTER", [
+        "/filter <tag>        show only tasks with #tag (blank clears)",
+        "/filter due <when>   today | tomorrow | week | overdue | YYYY-MM-DD",
+        "/completed           view completed tasks (grouped by day)",
+        "/back                leave the completed view",
+    ]),
+    ("app", "APP", [
+        "/theme [name]   switch color theme (blank lists them)",
+        "/sound          toggle completion / timer sounds",
+        "/export         write completed_report.txt",
+        "/clear all      delete all tasks + archive (keeps your timesheet)",
+        "/help [topic]   this help — e.g. /help schedule, /help time",
+    ]),
+]
+# map many tokens (and command names) onto a section key
+HELP_ALIASES = {
+    "tasks": "tasks", "task": "tasks", "add": "tasks", "done": "tasks",
+    "edit": "tasks", "due": "tasks", "delete": "tasks", "cat": "tasks",
+    "time": "time", "track": "time", "current": "time", "stop": "time",
+    "timer": "time", "pomodoro": "time", "categories": "time", "tracking": "time",
+    "schedule": "schedule", "timesheet": "schedule",
+    "stats": "stats", "stat": "stats",
+    "notes": "notes", "note": "notes",
+    "filter": "filter", "view": "filter", "completed": "filter", "back": "filter",
+    "app": "app", "theme": "app", "sound": "app", "export": "app", "clear": "app",
+    "help": "app",
+}
+
 # ---------- STORAGE ----------
 DATA_DIR = os.path.join(os.path.expanduser("~"), "TodoApp")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -452,6 +524,30 @@ class ScheduleScreen(Screen):
         self.app.pop_screen()
 
 
+# ---------- HELP ----------
+class HelpScreen(Screen):
+    """Scrollable help — all commands, or one topic via /help <topic>."""
+
+    BINDINGS = [("escape", "close", "close")]
+
+    def __init__(self, topic=None):
+        super().__init__()
+        self.topic = topic
+
+    def compose(self) -> ComposeResult:
+        title = "  ❓ HELP" + (f" · {self.topic}" if self.topic else "")
+        yield Static(title, id="help-title")
+        with VerticalScroll(id="help-scroll"):
+            yield Static(self.app.render_help(self.topic), id="help-body")
+        yield Static("  ↑/↓ or mouse-wheel to scroll · Esc back", id="help-help")
+
+    def on_mount(self):
+        self.query_one("#help-scroll").focus()  # so arrow keys scroll
+
+    def action_close(self):
+        self.app.pop_screen()
+
+
 # ---------- STATS ----------
 class StatsScreen(Screen):
     """Scrollable productivity dashboard."""
@@ -552,6 +648,13 @@ class TodoApp(App):
     #stats-help { height: 1; padding: 0 1; color: $secondary; }
     #stats-scroll { height: 1fr; border: round $accent; padding: 1 2; }
     #stats-body { height: auto; }
+
+    /* help */
+    HelpScreen { background: $background; }
+    #help-title { height: 1; padding: 0 1; background: $primary; color: $background; text-style: bold; }
+    #help-help { height: 1; padding: 0 1; color: $secondary; }
+    #help-scroll { height: 1fr; border: round $accent; padding: 1 2; }
+    #help-body { height: auto; }
 
     /* schedule / timesheet */
     ScheduleScreen { background: $background; }
@@ -1144,6 +1247,21 @@ class TodoApp(App):
         lines.append(f"  Due ≤ 7d     {s['due_week']}")
         lines.append(f"  No due date  {s['no_due']}")
         return "\n".join(lines)
+
+    # ---------- HELP ----------
+    def render_help(self, topic=None):
+        p = self._palette()
+        key = HELP_ALIASES.get(topic.strip().lstrip("/").lower()) if topic else None
+        lines = []
+        if topic and key is None:
+            lines.append(f"[{p.error}]No help topic '{topic}' — showing everything.[/]")
+            lines.append("")
+        sections = ([s for s in HELP_SECTIONS if s[0] == key] if key else HELP_SECTIONS)
+        for _skey, title, body in sections:
+            lines.append(f"[bold {p.primary}]{title}[/]")
+            lines.extend(body)
+            lines.append("")
+        return "\n".join(lines).rstrip()
 
     # ---------- CATEGORIES ----------
     def category_legend(self):
@@ -1934,42 +2052,8 @@ class TodoApp(App):
                 names = "  ".join(sorted(self.available_themes))
                 self.notify(f"Current: {self.theme}\nThemes: {names}\nUse /theme <name>", timeout=15)
 
-        elif cmd == "/help":
-            self.notify(
-                "ADD TASK: text, optional 'project/sub', optional due date\n"
-                "          e.g.  pay rent #bills Money/Home due today\n"
-                "  due forms: @today / due today · @fri / due fri · @3d · 2026-06-01\n"
-                "\n"
-                "/cat <n> <category>     assign a category to task n (blank = clear)\n"
-                "                          (or add '+build' when typing the task)\n"
-                "/current <n>            track time on task n (uses its category)\n"
-                "/current <n> <min>      pomodoro countdown on task n\n"
-                "/current <n> [min] <cat>  ...also tag the time to a category\n"
-                "/track <cat>            start a live stopwatch for a category (no task)\n"
-                "/track <cat> <min>      log <min> minutes to a category directly (e.g. /track 1 60)\n"
-                "                          cats: admin dev kt prod run plan build  (or 1-7)\n"
-                "/stop                   stop the active timer & log it (rounds to 30m)\n"
-                "/categories             list timesheet categories + shortcuts\n"
-                "/schedule               timesheet: day/week by category or task\n"
-                "/done <n>               complete task n\n"
-                "/edit <n>               load task n into the box to edit\n"
-                "/edit <n> due <date>    quickly set just the due date (e.g. due tomorrow)\n"
-                "/due <n> [date]         set/clear due date (blank = clear)\n"
-                "/delete <n>             delete task n\n"
-                "/filter <tag>           show only tasks with #tag (blank = clear)\n"
-                "/filter due <when>      by due date: today|tomorrow|week|overdue|YYYY-MM-DD\n"
-                "/stats                  productivity dashboard\n"
-                "/schedule               timesheet by day / week\n"
-                "/completed              view completed tasks\n"
-                "/back                   leave the completed view\n"
-                "/clear all              delete all tasks and archive\n"
-                "/export                 write completed_report.txt\n"
-                "/sound                  toggle completion/timer sounds\n"
-                "/notes [folder/path]    edit a folder's note (blank = search notes)\n"
-                "/theme [name]           switch color theme (blank = list; e.g. dracula)\n"
-                "/help                   show this help\n",
-                timeout=18
-            )
+        elif parts[0] == "/help":
+            self.push_screen(HelpScreen(parts[1] if len(parts) > 1 else None))
 
     # ---------- REFRESH ----------
     def _do_clear_all(self):

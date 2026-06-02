@@ -133,7 +133,7 @@ All commands are typed into the input box. `<n>` refers to a task's number in th
 | `/notes [folder/path]` | Edit a folder's note; no path opens the searchable notes browser |
 | `/sound` | Toggle completion/timer sounds on or off (persists) |
 | `/theme [name]` | Switch color theme; no name lists them all (e.g. `/theme dracula`) |
-| `/help` | Show in-app help |
+| `/help [topic]` | Scrollable in-app help; pass a topic to jump to it (e.g. `/help schedule`, `/help time`) |
 
 ## Where your data lives
 
