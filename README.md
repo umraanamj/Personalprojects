@@ -39,10 +39,16 @@ completion stats — all driven from a single command line at the bottom of the 
 - **Filtering** — by tag (`/filter #work`) or by due date
   (`/filter due today|tomorrow|week|overdue|<date>`). The active filter is shown in
   both panes.
-- **Pomodoro timer** — mark a task current and start a countdown with
-  `/current <n> <minutes>`. A large seven-segment clock and a full-width progress bar
-  fill the status bar, color-shifting green → amber → red as time runs out, and you get
-  a notification when it completes.
+- **Pomodoro & stopwatch** — `/current <n> <minutes>` runs a countdown; `/current <n>`
+  (no minutes) runs a **count-up stopwatch** that tracks how long a task takes. A large
+  seven-segment clock and a full-width bar fill the status bar.
+- **Time tracking / timesheets** — tag any timer to a category and log the time
+  (always **rounded up to 30 min**): `/current <n> <cat>`, `/current <n> <min> <cat>`,
+  or `/track <cat> [min]` for category time not tied to a task. `/stop` ends the active
+  timer and logs it; finishing a tracked task logs it too. Categories: `admin`, `dev`,
+  `kt`, `prod`, `run`, `plan`, `build` (or `1`–`7`). `/schedule` opens a **timesheet**:
+  pick day/week (←/→ to move, `d`/`w` to switch) and toggle (`t`) between a by-category
+  and a by-task breakdown, each with hours and bars.
 - **Completion stats** — the status bar tracks tasks completed today, this week, this
   month, this year, and in total. `/stats` opens a full **productivity dashboard**:
   most-productive day this week/month/year, best day ever, top month, busiest weekday,
@@ -101,7 +107,10 @@ All commands are typed into the input box. `<n>` refers to a task's number in th
 
 | Command | What it does |
 | --- | --- |
-| `/current <n> [minutes]` | Set the active task and (optionally) start a Pomodoro timer |
+| `/current <n> [min] [cat]` | Stopwatch (no min) or pomodoro (min) on a task, optionally tagged to a category |
+| `/track <cat> [min]` | Track a timesheet category not tied to a task (stopwatch or pomodoro) |
+| `/stop` | Stop the active timer and log it (rounded up to 30 min) |
+| `/schedule` | Timesheet: day/week breakdown by category or task |
 | `/done <n>` | Mark task `n` complete |
 | `/edit <n>` | Load task `n` back into the input box to edit (path shown first, so the text sits under the cursor) |
 | `/edit <n> due <date>` | Quickly change **only** the due date (`@<date>` also works) |

@@ -66,6 +66,28 @@ CTOS_THEME = Theme(
 )
 DEFAULT_THEME = "cp2077"
 
+# ---------- TIMESHEET CATEGORIES ----------
+# (code, label, shortcut tokens). Type the number or any keyword.
+CATEGORIES = [
+    ("admin", "Admin", ("admin", "1")),
+    ("dev",   "Develop Self", ("dev", "self", "2")),
+    ("kt",    "Onboarding / Knowledge Transfer", ("kt", "onboard", "onboarding", "3")),
+    ("prod",  "Production Support", ("prod", "support", "ps", "4")),
+    ("run",   "Run the Business", ("run", "rtb", "5")),
+    ("plan",  "Plan — strategy / research / discovery", ("plan", "6")),
+    ("build", "Build — dev / config / defects / refinement / sprint", ("build", "7")),
+]
+CATEGORY_LABEL = {code: label for code, label, _ in CATEGORIES}
+CATEGORY_ALIASES = {}
+for _code, _label, _aliases in CATEGORIES:
+    CATEGORY_ALIASES[_code] = _code
+    for _a in _aliases:
+        CATEGORY_ALIASES[_a] = _code
+
+
+def resolve_category(token):
+    return CATEGORY_ALIASES.get(token.strip().lower())
+
 # ---------- STORAGE ----------
 DATA_DIR = os.path.join(os.path.expanduser("~"), "TodoApp")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -363,6 +385,64 @@ class NotesBrowserScreen(Screen):
         self.app.pop_screen()
 
 
+# ---------- SCHEDULE / TIMESHEET ----------
+class ScheduleScreen(Screen):
+    """Timesheet view: day/week breakdown by category or by task."""
+
+    BINDINGS = [
+        ("escape", "close", "close"),
+        ("left", "prev", "prev"),
+        ("right", "next", "next"),
+        ("d", "day", "day"),
+        ("w", "week", "week"),
+        ("t", "toggle", "toggle view"),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.mode = "week"
+        self.view = "category"
+        self.anchor = None
+
+    def compose(self) -> ComposeResult:
+        yield Static("  📅 SCHEDULE", id="sched-title")
+        with VerticalScroll(id="sched-scroll"):
+            yield Static("", id="sched-body")
+        yield Static("  ←/→ move · d day · w week · t category/task · Esc back",
+                     id="sched-help")
+
+    def on_mount(self):
+        self.anchor = datetime.now().date()
+        self._render()
+
+    def _render(self):
+        self.query_one("#sched-body").update(
+            self.app.render_schedule(self.mode, self.anchor, self.view))
+
+    def action_prev(self):
+        self.anchor -= timedelta(days=7 if self.mode == "week" else 1)
+        self._render()
+
+    def action_next(self):
+        self.anchor += timedelta(days=7 if self.mode == "week" else 1)
+        self._render()
+
+    def action_day(self):
+        self.mode = "day"
+        self._render()
+
+    def action_week(self):
+        self.mode = "week"
+        self._render()
+
+    def action_toggle(self):
+        self.view = "task" if self.view == "category" else "category"
+        self._render()
+
+    def action_close(self):
+        self.app.pop_screen()
+
+
 # ---------- STATS ----------
 class StatsScreen(Screen):
     """Scrollable productivity dashboard."""
@@ -387,7 +467,7 @@ class TodoApp(App):
     COMMANDS = [
         "/help", "/current", "/done", "/edit", "/due", "/delete", "/filter",
         "/completed", "/back", "/clear all", "/export", "/sound", "/theme",
-        "/notes", "/stats",
+        "/notes", "/stats", "/track", "/stop", "/schedule",
     ]
 
     # All colors come from the active theme's variables, so /theme reskins the
@@ -463,6 +543,13 @@ class TodoApp(App):
     #stats-help { height: 1; padding: 0 1; color: $secondary; }
     #stats-scroll { height: 1fr; border: round $accent; padding: 1 2; }
     #stats-body { height: auto; }
+
+    /* schedule / timesheet */
+    ScheduleScreen { background: $background; }
+    #sched-title { height: 1; padding: 0 1; background: $primary; color: $background; text-style: bold; }
+    #sched-help { height: 1; padding: 0 1; color: $secondary; }
+    #sched-scroll { height: 1fr; border: round $accent; padding: 1 2; }
+    #sched-body { height: auto; }
     """
 
     def __init__(self):
@@ -474,6 +561,11 @@ class TodoApp(App):
         self.current_task_id = None
         self.timer_end = None
         self.timer_total = None
+        self.timer_mode = None          # None | "countdown" | "countup"
+        self.timer_start = None         # when the active timer began
+        self.timer_category = None      # timesheet category code, or None
+        self.timer_task_text = None     # cached task text for logging
+        self.time_entries = []          # logged timesheet blocks (rounded to 30m)
         self.editing_task_id = None
         self.filter_tag = None
         self.filter_due = None
@@ -694,27 +786,93 @@ class TodoApp(App):
             pass
 
     # ---------- TIMER ----------
+    def _round30(self, minutes):
+        # round UP to the nearest 30 minutes (min 30)
+        return max(30, math.ceil(minutes / 30) * 30)
+
+    def _log_time(self, minutes, category, task_text):
+        rounded = self._round30(minutes)
+        self.time_entries.append({
+            "date": datetime.now().date().isoformat(),
+            "category": category or "",
+            "task": task_text or "",
+            "minutes": rounded,
+        })
+        return rounded
+
+    def _start_countdown(self, mins, category, task_id, task_text):
+        self._stop_timer(log=True)
+        now = datetime.now()
+        self.timer_mode = "countdown"
+        self.timer_start = now
+        self.timer_end = now + timedelta(minutes=mins)
+        self.timer_total = mins * 60
+        self.timer_category = category
+        self.timer_task_text = task_text
+        self.current_task_id = task_id
+        self._play("start")
+
+    def _start_countup(self, category, task_id, task_text):
+        self._stop_timer(log=True)
+        self.timer_mode = "countup"
+        self.timer_start = datetime.now()
+        self.timer_end = None
+        self.timer_total = None
+        self.timer_category = category
+        self.timer_task_text = task_text
+        self.current_task_id = task_id
+        self._play("start")
+
+    def _stop_timer(self, log=True, announce=False):
+        if not self.timer_mode:
+            return None
+        elapsed_min = (datetime.now() - self.timer_start).total_seconds() / 60
+        cat, task_text = self.timer_category, self.timer_task_text
+        rounded = self._log_time(elapsed_min, cat, task_text) if log else None
+        self.timer_mode = None
+        self.timer_start = None
+        self.timer_end = None
+        self.timer_total = None
+        self.timer_category = None
+        self.timer_task_text = None
+        if announce and rounded:
+            label = CATEGORY_LABEL.get(cat, cat) if cat else (task_text or "untracked")
+            self.notify(f"▓ LOGGED {rounded}m · {label}")
+        return rounded
+
     def update_timer(self):
-        if not self.timer_end:
+        if not self.timer_mode:
             return
-        if datetime.now() >= self.timer_end:
+        if self.timer_mode == "countdown" and datetime.now() >= self.timer_end:
+            cat, task_text = self.timer_category, self.timer_task_text
+            mins = (self.timer_total or 0) / 60
+            rounded = self._log_time(mins, cat, task_text)
+            self.timer_mode = None
             self.timer_end = None
             self.timer_total = None
+            self.timer_start = None
+            self.timer_category = None
+            self.timer_task_text = None
             self.current_task_id = None
-            self.notify("▓ OP COMPLETE")
+            label = CATEGORY_LABEL.get(cat, cat) if cat else (task_text or "session")
+            self.notify(f"▓ OP COMPLETE · logged {rounded}m · {label}")
             self._play("win")
+            self.save_data()
         self.refresh_all()
 
     def format_timer(self):
-        if not self.timer_end:
+        if self.timer_mode == "countdown":
+            sec = max(0, int((self.timer_end - datetime.now()).total_seconds()))
+        elif self.timer_mode == "countup":
+            sec = max(0, int((datetime.now() - self.timer_start).total_seconds()))
+        else:
             return "00:00"
-        sec = max(0, int((self.timer_end - datetime.now()).total_seconds()))
         m, s = divmod(sec, 60)
         return f"{m:02}:{s:02}"
 
     def timer_progress(self):
-        # Returns (remaining_sec, total_sec, fraction_elapsed) or None when idle.
-        if not self.timer_end or not self.timer_total:
+        # Returns (remaining_sec, total_sec, fraction_elapsed) or None.
+        if self.timer_mode != "countdown" or not self.timer_total:
             return None
         remaining = max(0.0, (self.timer_end - datetime.now()).total_seconds())
         total = self.timer_total
@@ -726,16 +884,20 @@ class TodoApp(App):
         prog = self.timer_progress()
         p = self._palette()
 
-        if prog:
+        running = self.timer_mode is not None
+        if prog:  # countdown / pomodoro
             remaining, total, frac = prog
             rem_frac = remaining / total if total else 0
             color = p.success if rem_frac > 0.5 else (p.warning if rem_frac > 0.2 else p.error)
+        elif self.timer_mode == "countup":
+            frac = 0.0
+            color = p.accent
         else:
             frac = 0.0
             color = p.primary
 
         # blink the colon once per heartbeat while a timer is running
-        if prog and not self.blink:
+        if running and not self.blink:
             txt = txt.replace(":", " ")
 
         rows = ["", "", ""]
@@ -766,10 +928,15 @@ class TodoApp(App):
             f"[{p.secondary}]buffer: {active}[/]"
         )
 
-        if prog:
-            info = f"[{color}]{int(frac * 100)}% elapsed[/]   [bold]{self.get_stats()}[/]"
+        if running:
+            mode = "POMODORO" if self.timer_mode == "countdown" else "TRACKING"
+            who = self.timer_task_text or "session"
+            cat = self.timer_category
+            tag = f" · [{p.accent}]{CATEGORY_LABEL.get(cat, cat)}[/]" if cat else ""
+            info = f"[{color}]{mode}[/] · {who}{tag}   [bold]{self.get_stats()}[/]"
         else:
-            info = f"[bold]{self.get_stats()}[/]   [dim]· /current <n> <min> to start a timer[/]"
+            info = (f"[bold]{self.get_stats()}[/]   "
+                    f"[dim]· /current <n> [min] [cat] · /track <cat> · /stop[/]")
 
         return f"{big}\n[{color}]{bar}[/]\n{telem}\n{info}"
 
@@ -969,6 +1136,57 @@ class TodoApp(App):
         lines.append(f"  No due date  {s['no_due']}")
         return "\n".join(lines)
 
+    # ---------- SCHEDULE / TIMESHEET ----------
+    def render_schedule(self, mode, anchor, view):
+        p = self._palette()
+        if mode == "week":
+            start = anchor - timedelta(days=anchor.weekday())
+            end = start + timedelta(days=6)
+            title = f"Week of {start.strftime('%b %d')} – {end.strftime('%b %d, %Y')}"
+        else:
+            start = end = anchor
+            title = anchor.strftime("%a %b %d, %Y")
+
+        entries = [e for e in self.time_entries
+                   if start <= date.fromisoformat(e["date"]) <= end]
+        total = sum(e["minutes"] for e in entries)
+
+        def hrs(m):
+            h, mm = divmod(m, 60)
+            return f"{h}h {mm:02d}m" if h else f"{mm}m"
+
+        lines = [
+            f"[bold {p.primary}]{title}[/]",
+            f"[{p.secondary}]total {hrs(total)}  ·  {view} view[/]",
+            "",
+        ]
+        if not entries:
+            lines.append(f"[{self._muted()}]// no time logged in this period[/]")
+            return "\n".join(lines)
+
+        if view == "category":
+            totals = Counter()
+            for e in entries:
+                totals[e["category"] or "untagged"] += e["minutes"]
+            mx = max(totals.values())
+            for code, mins in sorted(totals.items(), key=lambda kv: (-kv[1], kv[0])):
+                label = CATEGORY_LABEL.get(code, "Untagged" if code == "untagged" else code)
+                bar = "█" * max(1, round(mins / mx * 22))
+                lines.append(f"  [{p.accent}]{bar}[/] [{p.foreground}]{hrs(mins):>8}[/]  {label}")
+        else:  # by task
+            totals = Counter()
+            for e in entries:
+                if e["task"]:
+                    totals[e["task"]] += e["minutes"]
+            if not totals:
+                lines.append(f"[{self._muted()}]// no task-tagged time in this period[/]")
+                return "\n".join(lines)
+            mx = max(totals.values())
+            for task, mins in sorted(totals.items(), key=lambda kv: -kv[1]):
+                bar = "█" * max(1, round(mins / mx * 22))
+                lines.append(f"  [{p.accent}]{bar}[/] [{p.foreground}]{hrs(mins):>8}[/]  {task}")
+        return "\n".join(lines)
+
     # ---------- SAVE / LOAD ----------
     def save_data(self):
         data = {
@@ -978,6 +1196,7 @@ class TodoApp(App):
             "sound_on": self.sound_on,
             "theme": self.theme,
             "notes": self.notes,
+            "time_entries": self.time_entries,
         }
         tmp = DATA_FILE + ".tmp"
         with open(tmp, "w") as f:
@@ -1001,6 +1220,7 @@ class TodoApp(App):
         self.sound_on = data.get("sound_on", True)
         self._theme_name = data.get("theme", DEFAULT_THEME)
         self.notes = data.get("notes", {})
+        self.time_entries = data.get("time_entries", [])
 
     # ---------- EXPORT REPORT ----------
     def export_readable_report(self):
@@ -1446,16 +1666,47 @@ class TodoApp(App):
             try:
                 idx = int(parts[1])
                 task = self.get_open_tasks_ordered()[idx - 1]
-                self.current_task_id = task.id
-
-                if len(parts) > 2:
-                    mins = int(parts[2])
-                    self.timer_end = datetime.now() + timedelta(minutes=mins)
-                    self.timer_total = mins * 60
-                    self._play("start")
-                    self.notify(f"▸ UPLINK ENGAGED · {mins}m")
             except (ValueError, IndexError):
-                self.notify("! USAGE: /current <n> [minutes]")
+                self.notify("! USAGE: /current <n> [min] [category]")
+            else:
+                mins, cat = None, None
+                for tok in parts[2:]:
+                    if tok.isdigit():
+                        mins = int(tok)
+                    else:
+                        c = resolve_category(tok)
+                        if c:
+                            cat = c
+                tag = f" · {CATEGORY_LABEL[cat]}" if cat else ""
+                if mins:
+                    self._start_countdown(mins, cat, task.id, task.text)
+                    self.notify(f"▸ POMODORO {mins}m · {task.text}{tag}")
+                else:
+                    self._start_countup(cat, task.id, task.text)
+                    self.notify(f"▸ TRACKING · {task.text}{tag}")
+
+        elif parts[0] == "/track":
+            cat = resolve_category(parts[1]) if len(parts) > 1 else None
+            if not cat:
+                self.notify("! CATEGORY? admin · dev · kt · prod · run · plan · build  (or 1-7)")
+            else:
+                mins = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+                if mins:
+                    self._start_countdown(mins, cat, None, None)
+                    self.notify(f"▸ POMODORO {mins}m · {CATEGORY_LABEL[cat]}")
+                else:
+                    self._start_countup(cat, None, None)
+                    self.notify(f"▸ TRACKING · {CATEGORY_LABEL[cat]}")
+
+        elif cmd == "/stop":
+            if self.timer_mode:
+                self._stop_timer(log=True, announce=True)
+                self.current_task_id = None
+            else:
+                self.notify("! NO ACTIVE TIMER")
+
+        elif cmd == "/schedule":
+            self.push_screen(ScheduleScreen())
 
         elif parts[0] == "/done" and len(parts) > 1:
             try:
@@ -1467,10 +1718,11 @@ class TodoApp(App):
                 self._start_redact(task)
                 self.notify(f"▓ TARGET CLEARED · {task.text}")
 
+                # if a timer was tracking this task, log the time spent
                 if task.id == self.current_task_id:
+                    if self.timer_mode:
+                        self._stop_timer(log=True, announce=True)
                     self.current_task_id = None
-                    self.timer_end = None
-                    self.timer_total = None
             except (ValueError, IndexError):
                 self.notify("! INVALID NODE")
 
@@ -1506,9 +1758,8 @@ class TodoApp(App):
                 task = self.get_open_tasks_ordered()[idx - 1]
                 self.tasks.remove(task)
                 if task.id == self.current_task_id:
+                    self._stop_timer(log=False)  # don't bill a deleted task
                     self.current_task_id = None
-                    self.timer_end = None
-                    self.timer_total = None
                 if task.id == self.editing_task_id:
                     self.editing_task_id = None
                 self.notify(f"✗ PURGED · {task.text}")
@@ -1604,7 +1855,13 @@ class TodoApp(App):
                 "          e.g.  pay rent #bills Money/Home due today\n"
                 "  due forms: @today / due today · @fri / due fri · @3d · 2026-06-01\n"
                 "\n"
-                "/current <n> [minutes]  set active task + pomodoro timer\n"
+                "/current <n>            track time on task n (count-up stopwatch)\n"
+                "/current <n> <min>      pomodoro countdown on task n\n"
+                "/current <n> [min] <cat>  ...also tag the time to a category\n"
+                "/track <cat> [min]      track a category (no task); cats: admin dev kt\n"
+                "                          prod run plan build  (or 1-7)\n"
+                "/stop                   stop the active timer & log it (rounds to 30m)\n"
+                "/schedule               timesheet: day/week by category or task\n"
                 "/done <n>               complete task n\n"
                 "/edit <n>               load task n into the box to edit\n"
                 "/edit <n> due <date>    quickly set just the due date (e.g. due tomorrow)\n"
@@ -1613,6 +1870,7 @@ class TodoApp(App):
                 "/filter <tag>           show only tasks with #tag (blank = clear)\n"
                 "/filter due <when>      by due date: today|tomorrow|week|overdue|YYYY-MM-DD\n"
                 "/stats                  productivity dashboard\n"
+                "/schedule               timesheet by day / week\n"
                 "/completed              view completed tasks\n"
                 "/back                   leave the completed view\n"
                 "/clear all              delete all tasks and archive\n"
@@ -1626,12 +1884,11 @@ class TodoApp(App):
 
     # ---------- REFRESH ----------
     def _do_clear_all(self):
-        # actual wipe, run by PurgeScreen after the splash
+        # actual wipe, run by PurgeScreen after the splash (keeps timesheet log)
+        self._stop_timer(log=False)
         self.tasks.clear()
         self.archived_tasks.clear()
         self.current_task_id = None
-        self.timer_end = None
-        self.timer_total = None
         self.editing_task_id = None
         self.filter_tag = None
         self.filter_due = None
