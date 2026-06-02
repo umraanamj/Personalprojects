@@ -163,6 +163,31 @@ HELP_ALIASES = {
     "help": "app",
 }
 
+# one-line descriptions shown in the hint line while typing a /command
+COMMAND_DESCRIPTIONS = {
+    "/help": "scrollable help (try /help <topic>)",
+    "/current": "track time on a task — stopwatch, or pomodoro with <min>",
+    "/done": "complete a task",
+    "/edit": "edit a task (or /edit <n> due <date>)",
+    "/due": "set or clear a task's due date",
+    "/delete": "delete a task",
+    "/filter": "show only #tag or by due date",
+    "/completed": "view completed tasks, grouped by day",
+    "/back": "leave the completed view",
+    "/clear all": "delete all tasks + archive (keeps timesheet)",
+    "/export": "write completed_report.txt",
+    "/sound": "toggle completion / timer sounds",
+    "/theme": "switch color theme (blank = list)",
+    "/notes": "edit a folder's note (blank = search notes)",
+    "/stats": "productivity dashboard",
+    "/track": "log or track time to a category",
+    "/stop": "stop the active timer and log it",
+    "/schedule": "timesheet by day / week",
+    "/categories": "list categories + shortcuts",
+    "/cat": "assign a category to a task",
+    "/auditcat": "review uncategorized tasks; press 1–7 to assign",
+}
+
 # ---------- STORAGE ----------
 DATA_DIR = os.path.join(os.path.expanduser("~"), "TodoApp")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -1852,6 +1877,20 @@ class TodoApp(App):
         last = value.split(" ")[-1] if value else ""
         dates = "today · tomorrow · mon–sun · 3d · 2026-06-15"
         cats = "admin · dev · kt · prod · run · plan · build  (or 1–7)"
+
+        # ---- typing a command name (no space yet): show matches + descriptions ----
+        if low.startswith("/") and " " not in value:
+            matches = [c for c in self.COMMANDS if c.startswith(low)]
+            if not matches:
+                return "[dim]? unknown command — type /help[/]"
+            if len(matches) == 1:
+                c = matches[0]
+                return f"[dim]{c} — {COMMAND_DESCRIPTIONS.get(c, '')}[/]"
+            if low in self.COMMANDS:  # exact, but also a prefix of others
+                others = "  ".join(c for c in matches if c != low)
+                return f"[dim]{low} — {COMMAND_DESCRIPTIONS.get(low, '')}   · also {others}[/]"
+            shown = "  ·  ".join(matches[:6])
+            return f"[dim]{shown}{'  …' if len(matches) > 6 else ''}[/]"
 
         # ---- command contexts ----
         if low.startswith("/track"):
