@@ -138,7 +138,10 @@ HELP_SECTIONS = [
         "/filter <tag>        show only tasks with #tag (blank clears)",
         "/filter due <when>   today | tomorrow | week | overdue | YYYY-MM-DD",
         "/completed           view completed tasks (grouped by day)",
-        "/back                leave the completed view",
+        "/back                leave the completed view (or just press Esc)",
+        "",
+        "Esc always goes back: it closes any page, leaves the completed view,",
+        "or clears an active filter.",
     ]),
     ("app", "APP", [
         "/theme [name]   switch color theme (blank lists them)",
@@ -321,7 +324,8 @@ class InputSuggester(Suggester):
 
 # ---------- INPUT WIDGET ----------
 class TabInput(Input):
-    """An Input where Tab accepts the autocomplete suggestion (just like →)."""
+    """An Input where Tab accepts the autocomplete suggestion (just like →),
+    and Esc steps back out of the current view (matching the other screens)."""
 
     async def _on_key(self, event):
         if (
@@ -332,6 +336,10 @@ class TabInput(Input):
         ):
             self.value = self._suggestion
             self.cursor_position = len(self.value)
+            event.stop()
+            event.prevent_default()
+            return
+        if event.key == "escape" and self.app.go_back():
             event.stop()
             event.prevent_default()
             return
@@ -574,7 +582,7 @@ class AuditCategoriesScreen(Screen):
         yield Static("  🏷  ASSIGN CATEGORIES", id="audit-title")
         with VerticalScroll(id="audit-scroll"):
             yield Static(self._body_text(), id="audit-body")
-        yield Static("  press 1–7 to assign · s skip · Esc quit", id="audit-help")
+        yield Static("  press 1–7 to assign · s skip · Esc back", id="audit-help")
 
     def _current(self):
         # advance past anything already categorized / completed / deleted
@@ -1622,7 +1630,7 @@ class TodoApp(App):
 
         lines = []
         if self.filter_tag or self.filter_due:
-            lines.append(f"[{p.warning}]Filter: {self.filter_label()} (/filter to clear)[/]")
+            lines.append(f"[{p.warning}]Filter: {self.filter_label()}[/] [{self._muted()}](Esc to clear)[/]")
 
         def walk(node, prefix="", path=None):
             path = path or []
@@ -1671,7 +1679,7 @@ class TodoApp(App):
             return (
                 f"[{p.warning}]✓ COMPLETED LOG[/]  [{self._muted()}](shown left ←)[/]\n\n"
                 f"[{p.secondary}]{self.get_stats()}[/]\n\n"
-                f"[{self._muted()}]/back to return[/]"
+                f"[{self._muted()}]Esc (or /back) to return[/]"
             )
 
         open_tasks = self.get_open_tasks_ordered()
@@ -2206,6 +2214,25 @@ class TodoApp(App):
         self.filter_due = None
         self.save_data()
         self.refresh_all()
+
+    def go_back(self):
+        # Esc on the main screen: leave the completed view, else clear a filter,
+        # else cancel an edit / clear the input. Returns True if it did something.
+        if self.show_completed:
+            self.show_completed = False
+            self.refresh_all()
+            return True
+        if self.filter_tag or self.filter_due:
+            self.filter_tag = None
+            self.filter_due = None
+            self.notify("▸ FILTER CLEARED")
+            self.refresh_all()
+            return True
+        if self.input_box.value:
+            self.input_box.value = ""
+            self.editing_task_id = None
+            return True
+        return False
 
     def refresh_all(self):
         self.graph_view.update(self.build_graph())
