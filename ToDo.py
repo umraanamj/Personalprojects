@@ -402,42 +402,39 @@ class ScheduleScreen(Screen):
         super().__init__()
         self.mode = "week"
         self.view = "category"
-        self.anchor = None
+        self.anchor = datetime.now().date()
 
     def compose(self) -> ComposeResult:
         yield Static("  📅 SCHEDULE", id="sched-title")
         with VerticalScroll(id="sched-scroll"):
-            yield Static("", id="sched-body")
+            yield Static(self.app.render_schedule(self.mode, self.anchor, self.view),
+                         id="sched-body")
         yield Static("  ←/→ move · d day · w week · t category/task · Esc back",
                      id="sched-help")
 
-    def on_mount(self):
-        self.anchor = datetime.now().date()
-        self._render()
-
-    def _render(self):
+    def _refresh_body(self):
         self.query_one("#sched-body").update(
             self.app.render_schedule(self.mode, self.anchor, self.view))
 
     def action_prev(self):
         self.anchor -= timedelta(days=7 if self.mode == "week" else 1)
-        self._render()
+        self._refresh_body()
 
     def action_next(self):
         self.anchor += timedelta(days=7 if self.mode == "week" else 1)
-        self._render()
+        self._refresh_body()
 
     def action_day(self):
         self.mode = "day"
-        self._render()
+        self._refresh_body()
 
     def action_week(self):
         self.mode = "week"
-        self._render()
+        self._refresh_body()
 
     def action_toggle(self):
         self.view = "task" if self.view == "category" else "category"
-        self._render()
+        self._refresh_body()
 
     def action_close(self):
         self.app.pop_screen()
