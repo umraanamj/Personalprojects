@@ -104,6 +104,7 @@ HELP_SECTIONS = [
         "/edit <n> due <date>  quickly change only the due date",
         "/due <n> [date]       set or clear the due date (blank clears)",
         "/cat <n> <category>   assign a category (blank clears)",
+        "/auditcat             review every uncategorized task; press 1-7 to assign",
         "/delete <n>           delete task n",
     ]),
     ("time", "TIME TRACKING", [
@@ -151,6 +152,7 @@ HELP_SECTIONS = [
 HELP_ALIASES = {
     "tasks": "tasks", "task": "tasks", "add": "tasks", "done": "tasks",
     "edit": "tasks", "due": "tasks", "delete": "tasks", "cat": "tasks",
+    "auditcat": "tasks", "audit": "tasks",
     "time": "time", "track": "time", "current": "time", "stop": "time",
     "timer": "time", "pomodoro": "time", "categories": "time", "tracking": "time",
     "schedule": "schedule", "timesheet": "schedule",
@@ -524,6 +526,89 @@ class ScheduleScreen(Screen):
         self.app.pop_screen()
 
 
+# ---------- CATEGORY AUDIT ----------
+class AuditCategoriesScreen(Screen):
+    """Walk through uncategorized tasks; press 1-7 to assign a category."""
+
+    BINDINGS = [
+        ("1", "assign(1)", "admin"), ("2", "assign(2)", "dev"),
+        ("3", "assign(3)", "kt"), ("4", "assign(4)", "prod"),
+        ("5", "assign(5)", "run"), ("6", "assign(6)", "plan"),
+        ("7", "assign(7)", "build"),
+        ("s", "skip", "skip"),
+        ("escape", "close", "quit"),
+    ]
+
+    def __init__(self, task_ids):
+        super().__init__()
+        self.queue = task_ids
+        self.idx = 0
+        self.assigned = 0
+
+    def compose(self) -> ComposeResult:
+        yield Static("  🏷  ASSIGN CATEGORIES", id="audit-title")
+        with VerticalScroll(id="audit-scroll"):
+            yield Static(self._body_text(), id="audit-body")
+        yield Static("  press 1–7 to assign · s skip · Esc quit", id="audit-help")
+
+    def _current(self):
+        # advance past anything already categorized / completed / deleted
+        while self.idx < len(self.queue):
+            t = next((x for x in self.app.tasks if x.id == self.queue[self.idx]), None)
+            if t and not t.category and not t.completed:
+                return t
+            self.idx += 1
+        return None
+
+    def _body_text(self):
+        app = self.app
+        p = app._palette()
+        t = self._current()
+        if t is None:
+            return f"[{app._muted()}]✓ all reviewed — {self.assigned} assigned. Esc to close.[/]"
+        path = " / ".join(t.path) if t.path else "General"
+        due = self.app.due_str(t).strip()
+        lines = [
+            f"[{p.secondary}]task {self.idx + 1} of {len(self.queue)}[/]",
+            "",
+            f"  [bold {p.foreground}]{t.text}[/]  [{p.secondary}][{path}][/]"
+            + (f"  {due}" if due else ""),
+            "",
+            f"  [{p.secondary}]assign a category:[/]",
+        ]
+        for i, (code, label, _aliases) in enumerate(CATEGORIES, start=1):
+            lines.append(f"    [{app.get_color([code])}]{i}[/]  {label}")
+        return "\n".join(lines)
+
+    def _refresh(self):
+        self.query_one("#audit-body").update(self._body_text())
+
+    def _after(self):
+        if self._current() is None:
+            self.action_close()
+        else:
+            self._refresh()
+
+    def action_assign(self, n):
+        t = self._current()
+        if t:
+            t.category = CATEGORIES[n - 1][0]
+            self.assigned += 1
+            self.app.save_data()
+        self.idx += 1
+        self._after()
+
+    def action_skip(self):
+        self.idx += 1
+        self._after()
+
+    def action_close(self):
+        self.app.refresh_all()
+        self.app.pop_screen()
+        if self.assigned:
+            self.app.notify(f"▸ {self.assigned} task(s) categorized")
+
+
 # ---------- HELP ----------
 class HelpScreen(Screen):
     """Scrollable help — all commands, or one topic via /help <topic>."""
@@ -573,6 +658,7 @@ class TodoApp(App):
         "/help", "/current", "/done", "/edit", "/due", "/delete", "/filter",
         "/completed", "/back", "/clear all", "/export", "/sound", "/theme",
         "/notes", "/stats", "/track", "/stop", "/schedule", "/categories", "/cat",
+        "/auditcat",
     ]
 
     # All colors come from the active theme's variables, so /theme reskins the
@@ -648,6 +734,13 @@ class TodoApp(App):
     #stats-help { height: 1; padding: 0 1; color: $secondary; }
     #stats-scroll { height: 1fr; border: round $accent; padding: 1 2; }
     #stats-body { height: auto; }
+
+    /* category audit */
+    AuditCategoriesScreen { background: $background; }
+    #audit-title { height: 1; padding: 0 1; background: $primary; color: $background; text-style: bold; }
+    #audit-help { height: 1; padding: 0 1; color: $secondary; }
+    #audit-scroll { height: 1fr; border: round $accent; padding: 1 2; }
+    #audit-body { height: auto; }
 
     /* help */
     HelpScreen { background: $background; }
@@ -1892,6 +1985,13 @@ class TodoApp(App):
 
         elif cmd in ("/categories", "/cats"):
             self.notify(self.category_legend(), timeout=22)
+
+        elif cmd == "/auditcat":
+            pending = [t.id for t in self.tasks if not t.completed and not t.category]
+            if not pending:
+                self.notify("▸ all open tasks already have a category")
+            else:
+                self.push_screen(AuditCategoriesScreen(pending))
 
         elif parts[0] == "/cat":
             try:

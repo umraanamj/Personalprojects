@@ -112,6 +112,7 @@ All commands are typed into the input box. `<n>` refers to a task's number in th
 | Command | What it does |
 | --- | --- |
 | `/cat <n> <category>` | Assign a default category to a task (blank clears it); or add `+build` in the task text |
+| `/auditcat` | Step through every uncategorized task and assign each by pressing `1`–`7` |
 | `/current <n> [min] [cat]` | Stopwatch (no min) or pomodoro (min) on a task; uses the task's category if none given |
 | `/track <cat>` | Start a live stopwatch for a category (no task) |
 | `/track <cat> <min>` | Log `<min>` minutes to a category directly, rounded to 30 (e.g. `/track 1 60`) |
