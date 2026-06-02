@@ -464,7 +464,7 @@ class TodoApp(App):
     COMMANDS = [
         "/help", "/current", "/done", "/edit", "/due", "/delete", "/filter",
         "/completed", "/back", "/clear all", "/export", "/sound", "/theme",
-        "/notes", "/stats", "/track", "/stop", "/schedule",
+        "/notes", "/stats", "/track", "/stop", "/schedule", "/categories",
     ]
 
     # All colors come from the active theme's variables, so /theme reskins the
@@ -1133,6 +1133,13 @@ class TodoApp(App):
         lines.append(f"  No due date  {s['no_due']}")
         return "\n".join(lines)
 
+    # ---------- CATEGORIES ----------
+    def category_legend(self):
+        lines = ["TIMESHEET CATEGORIES — use any shortcut:"]
+        for code, label, aliases in CATEGORIES:
+            lines.append(f"  {' · '.join(aliases):<16} {label}")
+        return "\n".join(lines)
+
     # ---------- SCHEDULE / TIMESHEET ----------
     def render_schedule(self, mode, anchor, view):
         p = self._palette()
@@ -1599,6 +1606,10 @@ class TodoApp(App):
         last = value.split(" ")[-1] if value else ""
         dates = "today · tomorrow · mon–sun · 3d · 2026-06-15"
 
+        if low.startswith("/track"):
+            return "[dim]categories: admin · dev · kt · prod · run · plan · build  (or 1–7) · /categories[/]"
+        if re.match(r"/current\s+\d+\s", low):
+            return "[dim]optional: <min> and/or category — admin · dev · kt · prod · run · plan · build[/]"
         if low.startswith("/filter due"):
             return "[dim]filter by due: today · tomorrow · week · overdue · 2026-06-15[/]"
         if re.match(r"/edit\s+\d+\s", low) is not None:
@@ -1704,6 +1715,9 @@ class TodoApp(App):
 
         elif cmd == "/schedule":
             self.push_screen(ScheduleScreen())
+
+        elif cmd in ("/categories", "/cats"):
+            self.notify(self.category_legend(), timeout=22)
 
         elif parts[0] == "/done" and len(parts) > 1:
             try:
@@ -1858,6 +1872,7 @@ class TodoApp(App):
                 "/track <cat> [min]      track a category (no task); cats: admin dev kt\n"
                 "                          prod run plan build  (or 1-7)\n"
                 "/stop                   stop the active timer & log it (rounds to 30m)\n"
+                "/categories             list timesheet categories + shortcuts\n"
                 "/schedule               timesheet: day/week by category or task\n"
                 "/done <n>               complete task n\n"
                 "/edit <n>               load task n into the box to edit\n"
