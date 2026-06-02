@@ -44,7 +44,8 @@ completion stats — all driven from a single command line at the bottom of the 
   seven-segment clock and a full-width bar fill the status bar.
 - **Time tracking / timesheets** — tag any timer to a category and log the time
   (always **rounded up to 30 min**): `/current <n> <cat>`, `/current <n> <min> <cat>`,
-  or `/track <cat> [min]` for category time not tied to a task. `/stop` ends the active
+  `/track <cat>` to start a category stopwatch, or `/track <cat> <min>` to log a block
+  of time directly (e.g. `/track 1 60`). `/stop` ends the active
   timer and logs it; finishing a tracked task logs it too. Categories: `admin`, `dev`,
   `kt`, `prod`, `run`, `plan`, `build` (or `1`–`7`). `/schedule` opens a **timesheet**:
   pick day/week (←/→ to move, `d`/`w` to switch) and toggle (`t`) between a by-category
@@ -108,7 +109,9 @@ All commands are typed into the input box. `<n>` refers to a task's number in th
 | Command | What it does |
 | --- | --- |
 | `/current <n> [min] [cat]` | Stopwatch (no min) or pomodoro (min) on a task, optionally tagged to a category |
-| `/track <cat> [min]` | Track a timesheet category not tied to a task (stopwatch or pomodoro) |
+| `/track <cat>` | Start a live stopwatch for a category (no task) |
+| `/track <cat> <min>` | Log `<min>` minutes to a category directly, rounded to 30 (e.g. `/track 1 60`) |
+| `/categories` | List all timesheet categories and their shortcuts |
 | `/stop` | Stop the active timer and log it (rounded up to 30 min) |
 | `/schedule` | Timesheet: day/week breakdown by category or task |
 | `/done <n>` | Mark task `n` complete |

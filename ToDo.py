@@ -78,6 +78,7 @@ CATEGORIES = [
     ("build", "Build — dev / config / defects / refinement / sprint", ("build", "7")),
 ]
 CATEGORY_LABEL = {code: label for code, label, _ in CATEGORIES}
+CATEGORY_SHORT = {code: label.split("—")[0].strip() for code, label, _ in CATEGORIES}
 CATEGORY_ALIASES = {}
 for _code, _label, _aliases in CATEGORIES:
     CATEGORY_ALIASES[_code] = _code
@@ -1161,22 +1162,20 @@ class TodoApp(App):
 
         lines = [
             f"[bold {p.primary}]{title}[/]",
-            f"[{p.secondary}]total {hrs(total)}  ·  {view} view[/]",
+            f"[{p.secondary}]{view.upper()} VIEW  ·  total [bold]{hrs(total)}[/][/]",
             "",
         ]
         if not entries:
             lines.append(f"[{self._muted()}]// no time logged in this period[/]")
             return "\n".join(lines)
 
+        # build (label, minutes, color-key) rows for whichever view
         if view == "category":
             totals = Counter()
             for e in entries:
                 totals[e["category"] or "untagged"] += e["minutes"]
-            mx = max(totals.values())
-            for code, mins in sorted(totals.items(), key=lambda kv: (-kv[1], kv[0])):
-                label = CATEGORY_LABEL.get(code, "Untagged" if code == "untagged" else code)
-                bar = "█" * max(1, round(mins / mx * 22))
-                lines.append(f"  [{p.accent}]{bar}[/] [{p.foreground}]{hrs(mins):>8}[/]  {label}")
+            rows = [(CATEGORY_SHORT.get(c, "Untagged" if c == "untagged" else c), m, c)
+                    for c, m in totals.items()]
         else:  # by task
             totals = Counter()
             for e in entries:
@@ -1185,10 +1184,20 @@ class TodoApp(App):
             if not totals:
                 lines.append(f"[{self._muted()}]// no task-tagged time in this period[/]")
                 return "\n".join(lines)
-            mx = max(totals.values())
-            for task, mins in sorted(totals.items(), key=lambda kv: -kv[1]):
-                bar = "█" * max(1, round(mins / mx * 22))
-                lines.append(f"  [{p.accent}]{bar}[/] [{p.foreground}]{hrs(mins):>8}[/]  {task}")
+            rows = [((t if len(t) <= 28 else t[:27] + "…"), m, t) for t, m in totals.items()]
+
+        rows.sort(key=lambda r: -r[1])
+        mx = max(m for _, m, _ in rows)
+        wlbl = max(len(lbl) for lbl, _, _ in rows)
+        for label, mins, key in rows:
+            color = self.get_color([key])
+            bar = "█" * max(1, round(mins / mx * 18))
+            pct = round(mins / total * 100)
+            lines.append(
+                f"  [{color}]{label:<{wlbl}}[/]  "
+                f"[{p.foreground}]{hrs(mins):>7}[/]  "
+                f"[{color}]{bar}[/] [{self._muted()}]{pct:>2}%[/]"
+            )
         return "\n".join(lines)
 
     # ---------- SAVE / LOAD ----------
@@ -1697,14 +1706,14 @@ class TodoApp(App):
             cat = resolve_category(parts[1]) if len(parts) > 1 else None
             if not cat:
                 self.notify("! CATEGORY? admin · dev · kt · prod · run · plan · build  (or 1-7)")
+            elif len(parts) > 2 and parts[2].isdigit():
+                # log a block of time directly (rounded to 30m), no live timer
+                rounded = self._log_time(int(parts[2]), cat, None)
+                self.notify(f"▸ LOGGED {rounded}m · {CATEGORY_LABEL[cat]}")
             else:
-                mins = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
-                if mins:
-                    self._start_countdown(mins, cat, None, None)
-                    self.notify(f"▸ POMODORO {mins}m · {CATEGORY_LABEL[cat]}")
-                else:
-                    self._start_countup(cat, None, None)
-                    self.notify(f"▸ TRACKING · {CATEGORY_LABEL[cat]}")
+                # start a live count-up stopwatch for this category
+                self._start_countup(cat, None, None)
+                self.notify(f"▸ TRACKING · {CATEGORY_LABEL[cat]}")
 
         elif cmd == "/stop":
             if self.timer_mode:
@@ -1869,8 +1878,9 @@ class TodoApp(App):
                 "/current <n>            track time on task n (count-up stopwatch)\n"
                 "/current <n> <min>      pomodoro countdown on task n\n"
                 "/current <n> [min] <cat>  ...also tag the time to a category\n"
-                "/track <cat> [min]      track a category (no task); cats: admin dev kt\n"
-                "                          prod run plan build  (or 1-7)\n"
+                "/track <cat>            start a live stopwatch for a category (no task)\n"
+                "/track <cat> <min>      log <min> minutes to a category directly (e.g. /track 1 60)\n"
+                "                          cats: admin dev kt prod run plan build  (or 1-7)\n"
                 "/stop                   stop the active timer & log it (rounds to 30m)\n"
                 "/categories             list timesheet categories + shortcuts\n"
                 "/schedule               timesheet: day/week by category or task\n"
