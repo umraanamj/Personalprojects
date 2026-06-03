@@ -100,6 +100,7 @@ HELP_SECTIONS = [
         "  e.g.  pay rent #bills Money/Home +admin due fri",
         "",
         "/done <n>             complete task n",
+        "/done <n> <time>      complete task n and log time (e.g. 90, 1h30m)",
         "/edit <n>             load task n into the input to edit",
         "/edit <n> due <date>  quickly change only the due date",
         "/due <n> [date]       set or clear the due date (blank clears)",
@@ -170,7 +171,7 @@ HELP_ALIASES = {
 COMMAND_DESCRIPTIONS = {
     "/help": "scrollable help (try /help <topic>)",
     "/current": "track time on a task — stopwatch, or pomodoro with <min>",
-    "/done": "complete a task",
+    "/done": "complete a task (add a time to log it, e.g. /done 2 90)",
     "/edit": "edit a task (or /edit <n> due <date>)",
     "/due": "set or clear a task's due date",
     "/delete": "delete a task",
@@ -1027,6 +1028,23 @@ class TodoApp(App):
     def _round30(self, minutes):
         # round UP to the nearest 30 minutes (min 30)
         return max(30, math.ceil(minutes / 30) * 30)
+
+    def _parse_minutes(self, text):
+        """Parse a friendly duration into minutes, or None if unparseable.
+        Accepts '90' / '90m' (minutes), '1h' / '1.5h' (hours), and
+        combos like '1h30m' or '1h30'."""
+        s = text.strip().lower().replace(" ", "")
+        if not s:
+            return None
+        if re.fullmatch(r"\d+", s):                       # bare number = minutes
+            return int(s)
+        m = re.fullmatch(r"(\d+(?:\.\d+)?)h", s)          # decimal hours, e.g. 1.5h
+        if m:
+            return int(round(float(m.group(1)) * 60))
+        m = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m?)?", s)   # 1h30m / 1h30 / 45m
+        if m and (m.group(1) or m.group(2)):
+            return int(m.group(1) or 0) * 60 + int(m.group(2) or 0)
+        return None
 
     def _log_time(self, minutes, category, task_text):
         rounded = self._round30(minutes)
@@ -1905,6 +1923,8 @@ class TodoApp(App):
             return f"[dim]categories: {cats} · /categories[/]"
         if re.match(r"/current\s+\d+\s", low):
             return f"[dim]optional: <min> and/or category — {cats}[/]"
+        if re.match(r"/done\s+\d+\s", low):
+            return "[dim]optional: time to log — 90 · 90m · 1h · 1h30m[/]"
         if low.startswith("/filter due"):
             return "[dim]filter by due: today · tomorrow · week · overdue · 2026-06-15[/]"
         if re.match(r"/edit\s+\d+\s", low) is not None:
@@ -2062,19 +2082,34 @@ class TodoApp(App):
             try:
                 idx = int(parts[1])
                 task = self.get_open_tasks_ordered()[idx - 1]
+            except (ValueError, IndexError):
+                self.notify("! INVALID NODE")
+            else:
+                # an optional trailing time logs a timesheet block against this
+                # task's category (e.g. /done 2 90 · /done 2 1h30m)
+                logged = None
+                if len(parts) > 2:
+                    mins = self._parse_minutes(" ".join(parts[2:]))
+                    if mins is None:
+                        self.notify("! BAD TIME — try: /done 2 90 · /done 2 1h30m")
+                        return
+                    logged = self._log_time(mins, task.category, task.text)
+
                 task.completed = True
                 task.completed_at = datetime.now()
                 self._play("complete")
                 self._start_redact(task)
-                self.notify(f"▓ TARGET CLEARED · {task.text}")
+                if logged:
+                    self.notify(f"▓ TARGET CLEARED · {task.text}  (+{logged}m logged)")
+                else:
+                    self.notify(f"▓ TARGET CLEARED · {task.text}")
 
-                # if a timer was tracking this task, log the time spent
+                # if a timer was tracking this task, stop it — auto-log only when
+                # no explicit time was given (an explicit time supersedes it)
                 if task.id == self.current_task_id:
                     if self.timer_mode:
-                        self._stop_timer(log=True, announce=True)
+                        self._stop_timer(log=logged is None, announce=logged is None)
                     self.current_task_id = None
-            except (ValueError, IndexError):
-                self.notify("! INVALID NODE")
 
         elif parts[0] == "/edit" and len(parts) > 1:
             try:
