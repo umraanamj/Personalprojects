@@ -107,6 +107,7 @@ HELP_SECTIONS = [
         "/cat <n> <category>   assign a category (blank clears)",
         "/auditcat             review every uncategorized task; press 1-7 to assign",
         "/delete <n>           delete task n",
+        "/undo                 undo the last change (repeatable)",
     ]),
     ("time", "TIME TRACKING", [
         "/current <n>              stopwatch on task n (uses the task's category)",
@@ -139,6 +140,7 @@ HELP_SECTIONS = [
         "/filter <tag>        show only tasks with #tag (blank clears)",
         "/filter due <when>   today | tomorrow | week | overdue | YYYY-MM-DD",
         "/completed           view completed tasks (grouped by day)",
+        "/clearcomplete       archive all completed tasks (clears the view)",
         "/back                leave the completed view (or just press Esc)",
         "",
         "Esc always goes back: it closes any page, leaves the completed view,",
@@ -156,6 +158,7 @@ HELP_SECTIONS = [
 HELP_ALIASES = {
     "tasks": "tasks", "task": "tasks", "add": "tasks", "done": "tasks",
     "edit": "tasks", "due": "tasks", "delete": "tasks", "cat": "tasks",
+    "undo": "tasks",
     "auditcat": "tasks", "audit": "tasks",
     "time": "time", "track": "time", "current": "time", "stop": "time",
     "timer": "time", "pomodoro": "time", "categories": "time", "tracking": "time",
@@ -163,6 +166,7 @@ HELP_ALIASES = {
     "stats": "stats", "stat": "stats",
     "notes": "notes", "note": "notes",
     "filter": "filter", "view": "filter", "completed": "filter", "back": "filter",
+    "clearcomplete": "filter", "clearcompleted": "filter",
     "app": "app", "theme": "app", "sound": "app", "export": "app", "clear": "app",
     "help": "app",
 }
@@ -175,8 +179,10 @@ COMMAND_DESCRIPTIONS = {
     "/edit": "edit a task (or /edit <n> due <date>)",
     "/due": "set or clear a task's due date",
     "/delete": "delete a task",
+    "/undo": "undo the last change (add/done/delete/edit/due/cat/track…)",
     "/filter": "show only #tag or by due date",
     "/completed": "view completed tasks, grouped by day",
+    "/clearcomplete": "archive all completed tasks (clears them from the view)",
     "/back": "leave the completed view",
     "/clear all": "delete all tasks + archive (keeps timesheet)",
     "/export": "write completed_report.txt",
@@ -689,10 +695,11 @@ class TodoApp(App):
     SUB_TITLE = "night city task grid"
 
     COMMANDS = [
-        "/help", "/current", "/done", "/edit", "/due", "/delete", "/filter",
-        "/completed", "/back", "/clear all", "/export", "/sound", "/theme",
-        "/notes", "/stats", "/track", "/stop", "/schedule", "/categories", "/cat",
-        "/auditcat",
+        "/help", "/current", "/done", "/edit", "/due", "/delete", "/undo",
+        "/filter", "/completed", "/clearcomplete", "/back", "/clear all",
+        "/export", "/sound",
+        "/theme", "/notes", "/stats", "/track", "/stop", "/schedule",
+        "/categories", "/cat", "/auditcat",
     ]
 
     # All colors come from the active theme's variables, so /theme reskins the
@@ -809,6 +816,7 @@ class TodoApp(App):
         self.filter_tag = None
         self.filter_due = None
         self.notes = {}  # folder-path string -> free-form note text
+        self._undo_stack = []   # snapshots of task data, for /undo
         # animation / telemetry state
         self.start_time = datetime.now()
         self.blink = False
@@ -1474,6 +1482,44 @@ class TodoApp(App):
         return "\n".join(lines)
 
     # ---------- SAVE / LOAD ----------
+    # ---------- UNDO ----------
+    UNDO_LIMIT = 100
+
+    def _snapshot(self):
+        # value-only picture of all user-editable data (settings excluded)
+        return {
+            "tasks": [t.to_dict() for t in self.tasks],
+            "archived": [t.to_dict() for t in self.archived_tasks],
+            "task_id": self.task_id,
+            "notes": dict(self.notes),
+            "time_entries": [dict(e) for e in self.time_entries],
+        }
+
+    def _push_undo(self):
+        self._undo_stack.append(self._snapshot())
+        if len(self._undo_stack) > self.UNDO_LIMIT:
+            self._undo_stack.pop(0)
+
+    def _restore(self, snap):
+        self.tasks = [Task.from_dict(t) for t in snap["tasks"]]
+        self.archived_tasks = [Task.from_dict(t) for t in snap["archived"]]
+        self.task_id = snap["task_id"]
+        self.notes = dict(snap["notes"])
+        self.time_entries = [dict(e) for e in snap["time_entries"]]
+        # any in-flight edit/timer context may now point at stale tasks
+        self.editing_task_id = None
+
+    def undo_last(self):
+        # restore the most recent snapshot that differs from the current state,
+        # so read-only commands (/help, /filter, …) don't waste an undo step
+        current = self._snapshot()
+        while self._undo_stack:
+            snap = self._undo_stack.pop()
+            if snap != current:
+                self._restore(snap)
+                return True
+        return False
+
     def save_data(self):
         data = {
             "tasks": [t.to_dict() for t in self.tasks],
@@ -1958,6 +2004,11 @@ class TodoApp(App):
         raw = event.value.strip()
         event.input.value = ""
 
+        # snapshot before anything that might change data — but not before
+        # /undo itself (it must not record the state it's about to roll back)
+        if raw and raw.split()[0].lower() != "/undo":
+            self._push_undo()
+
         if raw.startswith("/"):
             self.editing_task_id = None
             self.handle_command(raw)
@@ -2046,6 +2097,12 @@ class TodoApp(App):
                 self.current_task_id = None
             else:
                 self.notify("! NO ACTIVE TIMER")
+
+        elif cmd == "/undo":
+            if self.undo_last():
+                self.notify("↶ UNDONE · last action reverted")
+            else:
+                self.notify("! NOTHING TO UNDO")
 
         elif cmd == "/schedule":
             self.push_screen(ScheduleScreen())
@@ -2198,6 +2255,19 @@ class TodoApp(App):
 
         elif cmd == "/back":
             self.show_completed = False
+
+        elif cmd in ("/clearcomplete", "/clearcompleted"):
+            # archive every completed task now (instead of waiting for the 24h
+            # auto-archive) so they drop out of the active view but stay in the
+            # /completed log and stats. Undoable via /undo.
+            done = [t for t in self.tasks if t.completed]
+            if not done:
+                self.notify("▸ no completed tasks to clear")
+            else:
+                self.archived_tasks.extend(done)
+                self.tasks = [t for t in self.tasks if not t.completed]
+                self.export_readable_report()
+                self.notify(f"✓ CLEARED {len(done)} completed task(s)")
 
         elif cmd == "/clear all":
             self.push_screen(PurgeScreen())  # splash, then _do_clear_all()
