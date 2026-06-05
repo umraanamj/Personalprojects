@@ -138,6 +138,9 @@ HELP_SECTIONS = [
         "  d / w      day or week view",
         "  t          toggle category vs task breakdown",
         "  Esc        close",
+        "",
+        "The day view also lists the individual tasks behind each",
+        "category's hours.",
     ]),
     ("stats", "STATS", [
         "/stats   productivity dashboard — completed counts, most-productive",
@@ -1558,6 +1561,45 @@ class TodoApp(App):
                 f"[{p.foreground}]{hrs(mins):>7}[/]  "
                 f"[{color}]{bar}[/] [{self._muted()}]{pct:>2}%[/]"
             )
+
+        # In the daily view, also break down the individual tasks that produced
+        # the day's hours (time/category on the left so the task text runs full).
+        if mode == "day" and view == "category":
+            by_task = Counter()
+            untracked = Counter()
+            for e in entries:
+                if e["task"]:
+                    by_task[(e["task"], e["category"] or "")] += e["minutes"]
+                else:
+                    untracked[e["category"] or ""] += e["minutes"]
+
+            detail = sorted(by_task.items(), key=lambda kv: -kv[1])
+            extra = sorted(untracked.items(), key=lambda kv: -kv[1])
+            if detail or extra:
+                badge_w = max(
+                    [len(c) + 1 if c else len("·untagged")
+                     for (_, c), _ in detail]
+                    + [len(c) + 1 if c else len("·untagged") for c, _ in extra]
+                )
+                lines.append("")
+                lines.append(f"[bold {p.primary}]CONTRIBUTING TASKS[/]")
+                for (task, cat), mins in detail:
+                    badge = f"·{cat}" if cat else "·untagged"
+                    ccolor = self.get_color([cat]) if cat else self._muted()
+                    pad = " " * (badge_w - len(badge))
+                    lines.append(
+                        f"  [{p.foreground}]{hrs(mins):>7}[/]  "
+                        f"[{ccolor}]{badge}[/]{pad}  [{p.foreground}]{task}[/]"
+                    )
+                for cat, mins in extra:
+                    badge = f"·{cat}" if cat else "·untagged"
+                    ccolor = self.get_color([cat]) if cat else self._muted()
+                    pad = " " * (badge_w - len(badge))
+                    lines.append(
+                        f"  [{p.foreground}]{hrs(mins):>7}[/]  "
+                        f"[{ccolor}]{badge}[/]{pad}  [{self._muted()}](untracked)[/]"
+                    )
+
         return "\n".join(lines)
 
     # ---------- SAVE / LOAD ----------
