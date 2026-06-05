@@ -1769,7 +1769,8 @@ class TodoApp(App):
         if f == "overdue":
             return t.due is not None and t.due < today
         if f == "today":
-            return t.due == today
+            # "due today" also surfaces anything overdue (still needs doing today)
+            return t.due is not None and t.due <= today
         if f == "tomorrow":
             return t.due == today + timedelta(days=1)
         if f == "week":
