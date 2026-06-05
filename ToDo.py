@@ -68,6 +68,9 @@ DEFAULT_THEME = "cp2077"
 
 # ---------- TIMESHEET CATEGORIES ----------
 # (code, label, shortcut tokens). Type the number or any keyword.
+# "personal" is special: tasks tagged personal are never billed to the
+# timesheet and never appear in the schedule (see _log_time / render_schedule).
+PERSONAL_CAT = "personal"
 CATEGORIES = [
     ("admin", "Admin", ("admin", "1")),
     ("dev",   "Develop Self", ("dev", "self", "2")),
@@ -76,6 +79,7 @@ CATEGORIES = [
     ("run",   "Run the Business", ("run", "rtb", "5")),
     ("plan",  "Plan — strategy / research / discovery", ("plan", "6")),
     ("build", "Build — dev / config / defects / refinement / sprint", ("build", "7")),
+    ("personal", "Personal — not time-tracked", ("personal", "pers", "8")),
 ]
 CATEGORY_LABEL = {code: label for code, label, _ in CATEGORIES}
 CATEGORY_SHORT = {code: label.split("—")[0].strip() for code, label, _ in CATEGORIES}
@@ -105,7 +109,7 @@ HELP_SECTIONS = [
         "/edit <n> due <date>  quickly change only the due date",
         "/due <n> [date]       set or clear the due date (blank clears)",
         "/cat <n> <category>   assign a category (blank clears)",
-        "/auditcat             review every uncategorized task; press 1-7 to assign",
+        "/auditcat             review every uncategorized task; press 1-8 to assign",
         "/delete <n>           delete task n",
         "/undo                 undo the last change (repeatable)",
     ]),
@@ -119,7 +123,11 @@ HELP_SECTIONS = [
         "/categories               list categories and their shortcuts",
         "",
         "All logged time rounds UP to the nearest 30 minutes.",
-        "Categories: admin·1  dev·2  kt·3  prod·4  run·5  plan·6  build·7",
+        "Categories: admin·1  dev·2  kt·3  prod·4  run·5  plan·6  build·7  personal·8",
+        "",
+        "Closing a task with no time given logs 30m to its category.",
+        "Tasks marked +personal are never time-tracked and never appear in",
+        "the schedule (and closing one logs nothing).",
     ]),
     ("schedule", "SCHEDULE / TIMESHEET", [
         "/schedule    open the timesheet, then:",
@@ -137,6 +145,7 @@ HELP_SECTIONS = [
         "/notes                 search all your notes",
     ]),
     ("filter", "VIEW & FILTER", [
+        "/folderview          full-screen view of every parent folder + tasks",
         "/filter <tag>        show only tasks with #tag (blank clears)",
         "/filter due <when>   today | tomorrow | week | overdue | YYYY-MM-DD",
         "/completed           view completed tasks (grouped by day)",
@@ -167,6 +176,7 @@ HELP_ALIASES = {
     "notes": "notes", "note": "notes",
     "filter": "filter", "view": "filter", "completed": "filter", "back": "filter",
     "clearcomplete": "filter", "clearcompleted": "filter",
+    "folderview": "filter", "folders": "filter",
     "app": "app", "theme": "app", "sound": "app", "export": "app", "clear": "app",
     "help": "app",
 }
@@ -195,7 +205,8 @@ COMMAND_DESCRIPTIONS = {
     "/schedule": "timesheet by day / week",
     "/categories": "list categories + shortcuts",
     "/cat": "assign a category to a task",
-    "/auditcat": "review uncategorized tasks; press 1–7 to assign",
+    "/auditcat": "review uncategorized tasks; press 1–8 to assign",
+    "/folderview": "full-screen view of every parent folder and its tasks",
 }
 
 # ---------- STORAGE ----------
@@ -574,7 +585,7 @@ class AuditCategoriesScreen(Screen):
         ("1", "assign(1)", "admin"), ("2", "assign(2)", "dev"),
         ("3", "assign(3)", "kt"), ("4", "assign(4)", "prod"),
         ("5", "assign(5)", "run"), ("6", "assign(6)", "plan"),
-        ("7", "assign(7)", "build"),
+        ("7", "assign(7)", "build"), ("8", "assign(8)", "personal"),
         ("s", "skip", "skip"),
         ("escape", "close", "quit"),
     ]
@@ -589,7 +600,7 @@ class AuditCategoriesScreen(Screen):
         yield Static("  🏷  ASSIGN CATEGORIES", id="audit-title")
         with VerticalScroll(id="audit-scroll"):
             yield Static(self._body_text(), id="audit-body")
-        yield Static("  press 1–7 to assign · s skip · Esc back", id="audit-help")
+        yield Static("  press 1–8 to assign · s skip · Esc back", id="audit-help")
 
     def _current(self):
         # advance past anything already categorized / completed / deleted
@@ -689,6 +700,25 @@ class StatsScreen(Screen):
         self.app.pop_screen()
 
 
+# ---------- FOLDER VIEW ----------
+class FolderViewScreen(Screen):
+    """Full-screen overview of every top-level project and its open tasks."""
+
+    BINDINGS = [("escape", "close", "close")]
+
+    def compose(self) -> ComposeResult:
+        yield Static("  🗂  FOLDER VIEW", id="folder-title")
+        with VerticalScroll(id="folder-scroll"):
+            yield Static(self.app.render_folderview(), id="folder-body")
+        yield Static("  ↑/↓ or mouse-wheel to scroll · Esc back", id="folder-help")
+
+    def on_mount(self):
+        self.query_one("#folder-scroll").focus()
+
+    def action_close(self):
+        self.app.pop_screen()
+
+
 # ---------- APP ----------
 class TodoApp(App):
     TITLE = "TODO//2077"
@@ -699,7 +729,7 @@ class TodoApp(App):
         "/filter", "/completed", "/clearcomplete", "/back", "/clear all",
         "/export", "/sound",
         "/theme", "/notes", "/stats", "/track", "/stop", "/schedule",
-        "/categories", "/cat", "/auditcat",
+        "/categories", "/cat", "/auditcat", "/folderview",
     ]
 
     # All colors come from the active theme's variables, so /theme reskins the
@@ -775,6 +805,13 @@ class TodoApp(App):
     #stats-help { height: 1; padding: 0 1; color: $secondary; }
     #stats-scroll { height: 1fr; border: round $accent; padding: 1 2; }
     #stats-body { height: auto; }
+
+    /* folder view */
+    FolderViewScreen { background: $background; }
+    #folder-title { height: 1; padding: 0 1; background: $primary; color: $background; text-style: bold; }
+    #folder-help { height: 1; padding: 0 1; color: $secondary; }
+    #folder-scroll { height: 1fr; border: round $accent; padding: 1 2; }
+    #folder-body { height: auto; }
 
     /* category audit */
     AuditCategoriesScreen { background: $background; }
@@ -1054,7 +1091,13 @@ class TodoApp(App):
             return int(m.group(1) or 0) * 60 + int(m.group(2) or 0)
         return None
 
+    def is_personal(self, task):
+        return task is not None and task.category == PERSONAL_CAT
+
     def _log_time(self, minutes, category, task_text):
+        # personal work is never billed to the timesheet / schedule
+        if category == PERSONAL_CAT:
+            return None
         rounded = self._round30(minutes)
         self.time_entries.append({
             "date": datetime.now().date().isoformat(),
@@ -1119,7 +1162,10 @@ class TodoApp(App):
             self.timer_task_text = None
             self.current_task_id = None
             label = CATEGORY_LABEL.get(cat, cat) if cat else (task_text or "session")
-            self.notify(f"▓ OP COMPLETE · logged {rounded}m · {label}")
+            if rounded:
+                self.notify(f"▓ OP COMPLETE · logged {rounded}m · {label}")
+            else:
+                self.notify(f"▓ OP COMPLETE · {label}")
             self._play("win")
             self.save_data()
         self.refresh_all()
@@ -1399,6 +1445,35 @@ class TodoApp(App):
         lines.append(f"  Due ≤ 7d     {s['due_week']}")
         lines.append(f"  No due date  {s['no_due']}")
         return "\n".join(lines)
+
+    # ---------- FOLDER VIEW ----------
+    def render_folderview(self):
+        # Group every open task under its top-level project folder so all the
+        # major parents and their tasks are visible at a glance.
+        open_tasks = [t for t in self.tasks if not t.completed]
+        if not open_tasks:
+            return f"[{self._muted()}]// no active tasks — awaiting input[/]"
+
+        groups = {}
+        for t in open_tasks:
+            top = t.path[0].title() if t.path else "General"
+            groups.setdefault(top, []).append(t)
+
+        lines = []
+        for top in sorted(groups, key=lambda k: (k == "General", k.lower())):
+            color = self.get_color([top])
+            tasks = sorted(groups[top], key=lambda t: (t.due or date.max, t.path, t.text))
+            lines.append(f"[bold {color}]{top}[/]  "
+                         f"[{self._muted()}]· {len(tasks)} task(s)[/]")
+            for t in tasks:
+                sub = " / ".join(t.path[1:]) if len(t.path) > 1 else ""
+                sub_str = f"  [{self._muted()}][{sub}][/]" if sub else ""
+                lines.append(
+                    f"   [{color}]•[/] {t.text}{sub_str}"
+                    + self.due_str(t) + self.cat_str(t)
+                )
+            lines.append("")
+        return "\n".join(lines).rstrip()
 
     # ---------- HELP ----------
     def render_help(self, topic=None):
@@ -1948,7 +2023,7 @@ class TodoApp(App):
         low = value.lower()
         last = value.split(" ")[-1] if value else ""
         dates = "today · tomorrow · mon–sun · 3d · 2026-06-15"
-        cats = "admin · dev · kt · prod · run · plan · build  (or 1–7)"
+        cats = "admin · dev · kt · prod · run · plan · build · personal  (or 1–8)"
 
         # ---- typing a command name (no space yet): show matches + descriptions ----
         if low.startswith("/") and " " not in value:
@@ -2080,7 +2155,9 @@ class TodoApp(App):
 
         elif parts[0] == "/track":
             cat = resolve_category(parts[1]) if len(parts) > 1 else None
-            if not cat:
+            if cat == PERSONAL_CAT:
+                self.notify("▸ personal isn't time-tracked")
+            elif not cat:
                 self.notify("! CATEGORY? admin · dev · kt · prod · run · plan · build  (or 1-7)")
             elif len(parts) > 2 and parts[2].isdigit():
                 # log a block of time directly (rounded to 30m), no live timer
@@ -2156,17 +2233,25 @@ class TodoApp(App):
                 task.completed_at = datetime.now()
                 self._play("complete")
                 self._start_redact(task)
+
+                # if a timer was tracking this task, stop it — auto-log only when
+                # no explicit time was given (an explicit time supersedes it)
+                timer_logged = None
+                if task.id == self.current_task_id:
+                    if self.timer_mode:
+                        timer_logged = self._stop_timer(
+                            log=logged is None, announce=logged is None)
+                    self.current_task_id = None
+
+                # default: closing out a non-personal task with no time recorded
+                # (no explicit time, no timer) counts as a 30-minute block
+                if logged is None and timer_logged is None and not self.is_personal(task):
+                    logged = self._log_time(30, task.category, task.text)
+
                 if logged:
                     self.notify(f"▓ TARGET CLEARED · {task.text}  (+{logged}m logged)")
                 else:
                     self.notify(f"▓ TARGET CLEARED · {task.text}")
-
-                # if a timer was tracking this task, stop it — auto-log only when
-                # no explicit time was given (an explicit time supersedes it)
-                if task.id == self.current_task_id:
-                    if self.timer_mode:
-                        self._stop_timer(log=logged is None, announce=logged is None)
-                    self.current_task_id = None
 
         elif parts[0] == "/edit" and len(parts) > 1:
             try:
@@ -2249,6 +2334,9 @@ class TodoApp(App):
 
         elif cmd == "/stats":
             self.push_screen(StatsScreen())
+
+        elif cmd in ("/folderview", "/folders"):
+            self.push_screen(FolderViewScreen())
 
         elif cmd == "/completed":
             self.show_completed = True
