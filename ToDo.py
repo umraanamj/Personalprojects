@@ -24,6 +24,10 @@ from collections import Counter
 # glyphs used for the "decrypt" scramble effect and title glitch
 SCRAMBLE_GLYPHS = "!@#$%&*+=/\\<>?▓▒░01x"
 
+# strips Rich markup tags (e.g. "[bold #fff]") so we can measure the *visible*
+# width of a styled string — needed to align the project tiles in the grid.
+MARKUP_RE = re.compile(r"\[/?[^\[\]]*\]")
+
 # short synthesized "technical" blips per event: lists of (frequency_hz, ms).
 # ascending tones read as a sci-fi UI confirm rather than a notification chime.
 TECH_TONES = {
@@ -65,6 +69,9 @@ CTOS_THEME = Theme(
     dark=True,
 )
 DEFAULT_THEME = "cp2077"
+
+# app build version — shown on the boot/title screen and the header subtitle
+APP_VERSION = "1.5"
 
 # ---------- TIMESHEET CATEGORIES ----------
 # (code, label, shortcut tokens). Type the number or any keyword.
@@ -370,6 +377,7 @@ class BootScreen(Screen):
 
     LINES = [
         "> ctOS TERMINAL  v3.1",
+        f"> TODO//2077  ·  BUILD v{APP_VERSION}",
         "> ESTABLISHING UPLINK ......... OK",
         "> AUTHENTICATING .............. OK",
         "> SYNCING NODES [{n}] ......... OK",
@@ -722,7 +730,7 @@ class FolderViewScreen(Screen):
 # ---------- APP ----------
 class TodoApp(App):
     TITLE = "TODO//2077"
-    SUB_TITLE = "night city task grid"
+    SUB_TITLE = f"night city task grid · v{APP_VERSION}"
 
     COMMANDS = [
         "/help", "/current", "/done", "/edit", "/due", "/delete", "/undo",
@@ -1748,68 +1756,162 @@ class TodoApp(App):
         open_tasks.sort(key=lambda t: (t.due or date.max, t.path, t.text))
         return open_tasks
 
-    # ---------- GRAPH ----------
+    # ---------- GRAPH (TILE VIEW) ----------
+    @staticmethod
+    def _vis(s):
+        # visible width of a markup string (tags don't take screen columns)
+        return len(MARKUP_RE.sub("", s))
+
+    def _graph_width(self):
+        # usable inner width of the left pane (minus border + padding + scrollbar)
+        try:
+            w = self.query_one("#graph-scroll").size.width
+        except Exception:
+            w = 0
+        if w <= 0:
+            w = 60
+        return max(24, w - 6)
+
+    def _due_badge(self, t):
+        # (plain label, color) for a task's due date, emoji-free for tile alignment
+        if not t.due:
+            return "", ""
+        p = self._palette()
+        delta = (t.due - datetime.now().date()).days
+        if delta < 0:
+            return f"overdue {-delta}d", f"bold {p.error}"
+        if delta == 0:
+            return "today", f"bold {p.warning}"
+        if delta == 1:
+            return "tmrw", p.accent
+        if delta <= 7:
+            return t.due.strftime("%a"), p.secondary
+        return t.due.isoformat(), "#6b7a80"
+
+    def _make_tile(self, title, color, tasks, index_map, width):
+        # Build one project tile as a list of lines, each exactly `width` columns
+        # of *visible* text (markup excluded), so tiles align side by side.
+        iw = width - 2  # interior width, between the │ borders
+        head = f" {title} ({len(tasks)}) "
+        if len(head) > iw:
+            head = head[:iw]
+        lines = [f"[{color}]┌{head}{'─' * (iw - len(head))}┐[/]"]
+
+        for t in tasks:
+            num = index_map[id(t)]
+            is_current = t.id == self.current_task_id
+            mark = ">" if is_current else " "
+            prefix = f"{mark}({num}) "
+            label, due_color = self._due_badge(t)
+            due = f" ·{label}" if label else ""
+            budget = iw - 1  # leave one leading space inside the tile
+            room = budget - len(prefix) - len(due)
+            if room < 4 and due:           # not enough space — drop the due badge
+                due, due_color, room = "", "", budget - len(prefix)
+            text = t.text
+            if len(text) > room:
+                text = text[:max(0, room - 1)] + "…"
+            txt_color = f"bold {self._palette().accent}" if is_current else color
+            body = f"[{txt_color}]{prefix}{text}[/]"
+            if due:
+                body += f"[{due_color}]{due}[/]"
+            body = " " + body
+            body += " " * (iw - self._vis(body))
+            lines.append(f"[{color}]│[/]{body}[{color}]│[/]")
+
+        lines.append(f"[{color}]└{'─' * iw}┘[/]")
+        return lines
+
+    def _render_tag_links(self, open_tasks, index_map, width):
+        # Per-tag connector groups: each #tag fans lines out to every task with it.
+        p = self._palette()
+        tagmap = {}
+        for t in open_tasks:
+            for tok in set(t.text.split()):
+                if tok.startswith("#") and len(tok) > 1:
+                    tagmap.setdefault(tok, []).append(t)
+        shared = {tag: ts for tag, ts in tagmap.items() if len(ts) >= 2}
+        if not shared:
+            return []
+
+        order = sorted(shared, key=lambda tg: (-len(shared[tg]), tg.lower()))
+        tw = min(max(len(tg) for tg in order), 18)
+
+        lines = ["", f"[bold {p.primary}]TAG LINKS[/]"]
+        for tag in order:
+            ts = sorted(shared[tag], key=lambda t: index_map[id(t)])
+            tcolor = self.get_color([tag])
+            shown = tag if len(tag) <= tw else tag[:tw - 1] + "…"
+            for i, t in enumerate(ts):
+                pcolor = self.get_color(t.path)
+                num = index_map[id(t)]
+                lbl = f"({num}) {t.text}"
+                room = width - (tw + 6)
+                if room > 4 and len(lbl) > room:
+                    lbl = lbl[:room - 1] + "…"
+                if i == 0:
+                    stem = f"{shown:<{tw}} ──┬─" if len(ts) > 1 else f"{shown:<{tw}} ────"
+                else:
+                    branch = "└─" if i == len(ts) - 1 else "├─"
+                    stem = f"{' ' * (tw + 3)}{branch}"
+                lines.append(f"[{tcolor}]{stem}[/] [{pcolor}]{lbl}[/]")
+        return lines
+
+    def _join_tiles_row(self, tiles, width, gap=2):
+        # Stack a row of tiles side by side, padding short ones with blank lines.
+        height = max(len(tile) for tile in tiles)
+        blank = " " * width
+        out = []
+        for r in range(height):
+            cells = [tile[r] if r < len(tile) else blank for tile in tiles]
+            out.append((" " * gap).join(cells))
+        return out
+
     def build_graph(self):
         if self.show_completed:
             # show the completed log in the big left pane so it's prominent
             return self.build_completed_view()
 
         p = self._palette()
-
-        tree = {}
-        for t in self.visible_tasks():
-            node = tree
-            for seg in t.path:
-                if seg.strip():
-                    node = node.setdefault(seg.title(), {})
-            node.setdefault("_tasks", []).append(t)
-
         open_tasks = self.get_open_tasks_ordered()
         index_map = {id(t): i + 1 for i, t in enumerate(open_tasks)}
 
         lines = []
         if self.filter_tag or self.filter_due:
-            lines.append(f"[{p.warning}]Filter: {self.filter_label()}[/] [{self._muted()}](Esc to clear)[/]")
+            lines.append(f"[{p.warning}]Filter: {self.filter_label()}[/] "
+                         f"[{self._muted()}](Esc to clear)[/]")
 
-        def walk(node, prefix="", path=None):
-            path = path or []
-            keys = [k for k in node if k != "_tasks"]
+        if not open_tasks:
+            lines.append(f"[{self._muted()}]// no active tasks — awaiting input[/]")
+            return "\n".join(lines)
 
-            for i, k in enumerate(keys):
-                connector = "└── " if i == len(keys) - 1 else "├── "
-                color = self.get_color(path + [k])
-                note_mark = " 📝" if self._note_key(path + [k]) in self.notes else ""
-                lines.append(f"{prefix}{connector}[{color}]{k}[/]{note_mark}")
-                walk(node[k], prefix + ("    " if i == len(keys) - 1 else "│   "), path + [k])
+        # group open tasks under their top-level project folder
+        groups = {}
+        for t in open_tasks:
+            top = t.path[0].title() if t.path else "General"
+            groups.setdefault(top, []).append(t)
 
-            if "_tasks" in node:
-                # show tasks in the same due-first order as their numbers
-                node_tasks = sorted(
-                    node["_tasks"],
-                    key=lambda t: (index_map.get(id(t), 10**9), t.text)
-                )
-                for i, t in enumerate(node_tasks):
-                    connector = "└── " if i == len(node_tasks) - 1 else "├── "
-                    is_current = t.id == self.current_task_id
+        # responsive grid geometry: pack tiles into as many columns as fit
+        W = self._graph_width()
+        gap, target = 2, 28
+        cols = max(1, (W + gap) // (target + gap))
+        tile_w = max(16, (W - gap * (cols - 1)) // cols)
 
-                    display_id = "✓" if t.completed else index_map[id(t)]
+        names = sorted(groups, key=lambda k: (k == "General", k.lower()))
+        tiles = [
+            self._make_tile(name, self.get_color([name]),
+                            sorted(groups[name], key=lambda t: index_map[id(t)]),
+                            index_map, tile_w)
+            for name in names
+        ]
 
-                    style = self.get_color(t.path)
-                    if is_current:
-                        style = f"bold {p.accent}"
-                    elif self.current_task_id and not t.completed:
-                        style = "dim"
+        for i in range(0, len(tiles), cols):
+            row = tiles[i:i + cols]
+            lines.extend(self._join_tiles_row(row, tile_w, gap))
+            lines.append("")  # breathing room between tile rows
 
-                    prefix_mark = "▶ " if is_current else ""
-                    lines.append(
-                        f"{prefix}{connector}[{style}]"
-                        f"{prefix_mark}({display_id}) "
-                        f"{'✓ ' if t.completed else ''}{self._display_text(t)}[/]"
-                        + self.due_str(t) + self.cat_str(t)
-                    )
-
-        walk(tree)
-        return "\n".join(lines)
+        lines.extend(self._render_tag_links(open_tasks, index_map, W))
+        return "\n".join(lines).rstrip()
 
     # ---------- TASK VIEW ----------
     def build_task_view(self):
@@ -2426,6 +2528,13 @@ class TodoApp(App):
             self.editing_task_id = None
             return True
         return False
+
+    def on_resize(self, event):
+        # tiles are laid out to the pane's width, so reflow them on resize
+        try:
+            self.graph_view.update(self.build_graph())
+        except Exception:
+            pass
 
     def refresh_all(self):
         self.graph_view.update(self.build_graph())
