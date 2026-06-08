@@ -1765,11 +1765,20 @@ class TodoApp(App):
         core = [t for t in value.split() if not t.startswith(("@", "#", "+"))]
         if not core:
             return None
+        # explicit "Folder/Sub" token (leading or trailing) — used while writing a task
         cand = core[0] if "/" in core[0] else (core[-1] if "/" in core[-1] else None)
-        if not cand:
-            return None
-        segs = [s.strip().lower() for s in cand.split("/") if s.strip()]
-        return segs or None
+        if cand:
+            segs = [s.strip().lower() for s in cand.split("/") if s.strip()]
+            return segs or None
+        # bare folder name (no slash): only while the whole input is one word and
+        # that word prefixes an existing top-level folder — so ordinary one-word
+        # task text won't blank the list. Lets you just type a folder to search it.
+        if len(core) == 1 and len(core[0]) >= 2:
+            word = core[0].lower()
+            tops = self.folder_tree().get((), set())
+            if any(name.lower().startswith(word) for name in tops):
+                return [word]
+        return None
 
     def _matches_preview(self, t):
         # A task matches if its path starts with the typed segments, with the
