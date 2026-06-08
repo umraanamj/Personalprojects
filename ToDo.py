@@ -859,6 +859,10 @@ class TodoApp(App):
         self.editing_task_id = None
         self.filter_tag = None
         self.filter_due = None
+        # live folder preview: while you type a Folder/Sub path, the list filters
+        # to that folder; after submitting it lingers 5s, then reverts.
+        self.preview_segs = None        # lowercased path segments, or None
+        self._preview_timer = None      # handle for the post-submit revert
         self.notes = {}  # folder-path string -> free-form note text
         self._undo_stack = []   # snapshots of task data, for /undo
         # animation / telemetry state
@@ -1748,7 +1752,74 @@ class TodoApp(App):
             tasks = [t for t in tasks if tag in t.text.lower()]
         if self.filter_due:
             tasks = [t for t in tasks if self.match_due_filter(t)]
+        if self.preview_segs:
+            tasks = [t for t in tasks if self._matches_preview(t)]
         return tasks
+
+    # ---------- LIVE FOLDER PREVIEW ----------
+    def _preview_folder_segments(self, value):
+        # Find a Folder/Sub path the user is typing (leading or trailing token),
+        # returning lowercased segments — or None if there's no folder token.
+        if not value or value.startswith("/"):
+            return None
+        core = [t for t in value.split() if not t.startswith(("@", "#", "+"))]
+        if not core:
+            return None
+        cand = core[0] if "/" in core[0] else (core[-1] if "/" in core[-1] else None)
+        if not cand:
+            return None
+        segs = [s.strip().lower() for s in cand.split("/") if s.strip()]
+        return segs or None
+
+    def _matches_preview(self, t):
+        # A task matches if its path starts with the typed segments, with the
+        # last typed segment treated as a prefix (so "Work/Ba" matches Work/Backend).
+        segs = self.preview_segs
+        tp = [s.lower() for s in t.path]
+        if len(tp) < len(segs):
+            return False
+        for i, s in enumerate(segs):
+            if i == len(segs) - 1:
+                if not tp[i].startswith(s):
+                    return False
+            elif tp[i] != s:
+                return False
+        return True
+
+    def preview_label(self):
+        return " / ".join(s.title() for s in self.preview_segs) if self.preview_segs else ""
+
+    def _set_preview(self, segs):
+        if segs != self.preview_segs:
+            self.preview_segs = segs
+            self.refresh_all()
+
+    def _update_preview(self, value):
+        # Driven on every keystroke: follow the folder being typed live.
+        if value == "":
+            # input cleared — leave a pending post-submit revert alone, else clear
+            if self._preview_timer is None:
+                self._set_preview(None)
+            return
+        if self._preview_timer:           # active typing supersedes the revert timer
+            self._preview_timer.stop()
+            self._preview_timer = None
+        self._set_preview(self._preview_folder_segments(value))
+
+    def _begin_post_submit_preview(self, segs):
+        # Keep filtering to the just-submitted folder for 5s, then revert.
+        if self._preview_timer:
+            self._preview_timer.stop()
+            self._preview_timer = None
+        if not segs:
+            self._set_preview(None)
+            return
+        self._set_preview(segs)
+        self._preview_timer = self.set_timer(5.0, self._end_preview)
+
+    def _end_preview(self):
+        self._preview_timer = None
+        self._set_preview(None)
 
     def normalize_due_filter(self, spec):
         # Returns a keyword string, a date, or None if unrecognized.
@@ -1849,6 +1920,9 @@ class TodoApp(App):
         lines = []
         if self.filter_tag or self.filter_due:
             lines.append(f"[{p.warning}]Filter: {self.filter_label()}[/] [{self._muted()}](Esc to clear)[/]")
+        if self.preview_segs:
+            lines.append(f"[{p.accent}]▸ Folder: {self.preview_label()}[/] "
+                         f"[{self._muted()}](live preview)[/]")
 
         def walk(node, prefix="", path=None):
             path = path or []
@@ -1907,6 +1981,8 @@ class TodoApp(App):
         lines = []
         if self.filter_tag or self.filter_due:
             lines.append(f"[{p.warning}]Filter: {self.filter_label()}[/]")
+        if self.preview_segs:
+            lines.append(f"[{p.accent}]▸ Folder: {self.preview_label()}[/]")
 
         for i, t in enumerate(open_tasks, start=1):
             is_current = t.id == self.current_task_id
@@ -2153,6 +2229,7 @@ class TodoApp(App):
 
     def on_input_changed(self, event: Input.Changed):
         self.hint_bar.update(self.hint_for(event.value))
+        self._update_preview(event.value)
 
     # ---------- INPUT ----------
     def on_input_submitted(self, event: Input.Submitted):
@@ -2164,13 +2241,21 @@ class TodoApp(App):
         if raw and raw.split()[0].lower() != "/undo":
             self._push_undo()
 
+        submitted_path = None
         if raw.startswith("/"):
             self.editing_task_id = None
             self.handle_command(raw)
         elif self.editing_task_id is not None:
+            _, submitted_path, _, _ = self.parse_task_input(raw)
             self.apply_edit(raw)
         elif raw:
+            _, submitted_path, _, _ = self.parse_task_input(raw)
             self.add_task(raw)
+
+        # after adding/editing a task with a folder, linger on that folder's
+        # filtered view for 5 seconds, then revert to the full list
+        self._begin_post_submit_preview(
+            [s.lower() for s in submitted_path] if submitted_path else None)
 
         self.refresh_all()
         self.save_data()
